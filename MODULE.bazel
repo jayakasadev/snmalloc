@@ -4,3 +4,31 @@ bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 bazel_dep(name = "fuzztest", version = "20250214.0")
 bazel_dep(name = "googletest", version = "1.16.0")
+
+# -----------------------------------------------------------------------------
+# Rust support (snmalloc-rs / snmalloc-sys).
+#
+# rules_rust gives us `rust_library` / `rust_test` and the bindgen extension
+# that drives `rust_bindgen_library`.  The `wrapper.h` under
+# `snmalloc-rs/snmalloc-sys/` is the bindgen entry point; the generated
+# bindings are then linked against the static archive produced by
+# `cmake(name = "snmalloc-rs", ...)` in the root `BUILD.bazel` via
+# rules_foreign_cc.
+# -----------------------------------------------------------------------------
+bazel_dep(name = "rules_rust", version = "0.56.0")
+bazel_dep(name = "rules_rust_bindgen", version = "0.56.0")
+
+# Rust toolchain registration.  Pin a recent stable channel so the crate's
+# `edition = 2021` and `use_core()` bindgen output compile cleanly.
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.84.0"],
+)
+use_repo(rust, "rust_toolchains")
+register_toolchains("@rust_toolchains//:all")
+
+# Bindgen toolchain.  Provides the libclang shared library that
+# `rust_bindgen_library` invokes; without this the bindgen action fails with
+# "libclang not found".
+register_toolchains("@rules_rust_bindgen//:default_bindgen_toolchain")

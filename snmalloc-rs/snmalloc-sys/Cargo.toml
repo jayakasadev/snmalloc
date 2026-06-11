@@ -23,6 +23,14 @@ include = [
 [build-dependencies]
 cc = { version = "1.0", optional = true }
 cmake = { version = "0.1", optional = true }
+# Bindgen is invoked from build.rs to emit `bindings.rs` into OUT_DIR for
+# downstream tooling (Bazel rust_bindgen_library targets are wired
+# against the same `wrapper.h`).  The hand-written extern decls in
+# `src/lib.rs` are retained for now -- see the README/notes on the
+# bindgen migration -- so the generated file is not yet `include!`d.
+# `runtime = false` keeps the build-time dependency footprint minimal
+# (no shared libloading shim).
+bindgen = { version = "0.69", default-features = false, features = ["runtime"] }
 
 [features]
 default = ["build_cmake", "usewait-on-address"]

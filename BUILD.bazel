@@ -1,3 +1,4 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 filegroup(
@@ -11,6 +12,21 @@ filegroup(
         ],
     ),
     visibility = ["//visibility:private"],
+)
+
+# Headers-only target consumed by the Rust bindgen pipeline.  The
+# `rust_bindgen_library` rules under `//snmalloc-rs/snmalloc-sys` point
+# `cc_lib` at this so bindgen sees only the C ABI surface, never the
+# C++ implementation.  Exposes the snmalloc include root so a bindgen
+# `#include "snmalloc/override/rust.h"` resolves.
+cc_library(
+    name = "snmalloc_rust_headers",
+    hdrs = [
+        "src/snmalloc/override/rust.h",
+        "src/snmalloc/override/rust_profile.h",
+    ],
+    includes = ["src"],
+    visibility = ["//visibility:public"],
 )
 
 config_setting(
@@ -87,6 +103,36 @@ cmake(
     out_static_libs = [
         "libsnmallocshim-static.a",
         "libsnmalloc-new-override.a",
+        "libsnmallocshim-rust.a",
+    ],
+    postfix_script = "ninja",
+    visibility = ["//visibility:public"],
+)
+
+# Profile-enabled variant of the Rust shim archive.  Same source set as
+# `:snmalloc-rs` but with SNMALLOC_PROFILE=ON so the `sn_rust_profile_*`
+# exports in `rust.cc` switch from the no-op stubs to real bodies.  Used
+# by the `snmalloc_sys_profiling` Rust target.
+cmake(
+    name = "snmalloc-rs-profile",
+    cache_entries = CMAKE_FLAGS | {
+        "SNMALLOC_RUST_SUPPORT": "ON",
+        "SNMALLOC_PROFILE": "ON",
+    },
+    generate_args = ["-G Ninja"],
+    lib_source = ":srcs",
+    out_shared_libs = select({
+        "@bazel_tools//src/conditions:darwin": [
+            "libsnmallocshim-checks-memcpy-only.dylib",
+            "libsnmallocshim-checks.dylib",
+            "libsnmallocshim.dylib",
+        ],
+        "//conditions:default": [],
+    }),
+    out_static_libs = [
+        "libsnmallocshim-static.a",
+        "libsnmalloc-new-override.a",
+        "libsnmallocshim-rust.a",
     ],
     postfix_script = "ninja",
     visibility = ["//visibility:public"],
