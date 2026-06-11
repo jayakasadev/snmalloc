@@ -2,85 +2,6 @@
 
 use std::{env, path::{Path, PathBuf}};
 
-/// Emit a `bindings.rs` into `OUT_DIR` covering the snmalloc Rust shim
-/// C ABI surface (core + heap-profiling).
-///
-/// This is wired in to keep the Cargo build in lockstep with the Bazel
-/// `rust_bindgen_library` rules: both consume the same `wrapper.h` and
-/// the same allowlist arguments, so the FFI surface is generated from
-/// a single source of truth.  The current `src/lib.rs` still uses the
-/// hand-written extern decls; the generated file is emitted to
-/// `OUT_DIR/bindings.rs` so downstream tooling (and a future
-/// migration) can reference it.  See the bindgen-migration notes in
-/// the README.
-///
-/// `profiling = true` widens the allowlist to include the
-/// `sn_rust_profile_*` surface; otherwise only the core
-/// `sn_rust_(alloc|dealloc|realloc|statistics|usable_size|alloc_zeroed)`
-/// symbols (plus the `SnRustAlloc*` / `SnRustStats*` types, none of
-/// which exist today but are reserved for future expansion) are
-/// emitted.  The split mirrors the Bazel target layout.
-fn run_bindgen(source_root: &Path, out_dir: &Path, profiling: bool) {
-    let manifest_dir = PathBuf::from(
-        env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
-    );
-    let wrapper = manifest_dir.join("wrapper.h");
-    let include_root = source_root.join("src");
-
-    // Tell Cargo to re-run the build script if the wrapper or any of
-    // the headers it points at change.  We only depend on the C-side
-    // headers (rust.h, rust_profile.h) -- the .cc file is irrelevant
-    // to bindgen.
-    println!("cargo:rerun-if-changed={}", wrapper.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        include_root.join("snmalloc/override/rust.h").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        include_root.join("snmalloc/override/rust_profile.h").display()
-    );
-
-    let mut builder = bindgen::Builder::default()
-        .header(wrapper.to_string_lossy())
-        .clang_arg(format!("-I{}", include_root.display()))
-        .clang_arg("-x")
-        .clang_arg("c")
-        // The Rust crate is `no_std`, so map ctypes to the `core::ffi`
-        // re-exports rather than `std::os::raw`.
-        .use_core()
-        .ctypes_prefix("core::ffi")
-        // Layout tests bake in target-specific `align_of` values that
-        // make cross-compilation flaky; the FFI surface is already
-        // pinned by `#[repr(C)]` on the C side.
-        .layout_tests(false);
-
-    // Core symbols always emitted.
-    builder = builder
-        .allowlist_function("sn_rust_alloc")
-        .allowlist_function("sn_rust_alloc_zeroed")
-        .allowlist_function("sn_rust_dealloc")
-        .allowlist_function("sn_rust_realloc")
-        .allowlist_function("sn_rust_statistics")
-        .allowlist_function("sn_rust_usable_size");
-
-    if profiling {
-        builder = builder
-            .allowlist_function("sn_rust_profile_.*")
-            .allowlist_type("SnRust.*")
-            .allowlist_var("SNMALLOC_PROFILE_STACK_FRAMES");
-    }
-
-    let bindings = builder
-        .generate()
-        .expect("bindgen failed to generate bindings for snmalloc-sys");
-
-    let out_path = out_dir.join("bindings.rs");
-    bindings
-        .write_to_file(&out_path)
-        .unwrap_or_else(|e| panic!("failed to write {}: {}", out_path.display(), e));
-}
-
 #[derive(Debug, PartialEq)]
 enum Compiler {
     Clang,
@@ -720,14 +641,6 @@ use cmake::Config;
 
 fn main() {
     let mut config = BuildConfig::new();
-
-    // Generate Rust FFI bindings from `wrapper.h` into OUT_DIR.  This
-    // runs before the cmake/cc invocation so the bindings reflect the
-    // current C-side headers regardless of whether the cmake step
-    // succeeds.  Both Cargo features `profiling`-on and -off go
-    // through here; the allowlist scope widens when profiling is on.
-    let out_dir = PathBuf::from(&config.out_dir);
-    run_bindgen(&config.source_root, &out_dir, config.features.profiling);
 
     config.builder
         .configure_cpp(config.debug, &config.source_root)

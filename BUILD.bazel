@@ -1,4 +1,3 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 filegroup(
@@ -12,21 +11,6 @@ filegroup(
         ],
     ),
     visibility = ["//visibility:private"],
-)
-
-# Headers-only target consumed by the Rust bindgen pipeline.  The
-# `rust_bindgen_library` rules under `//snmalloc-rs/snmalloc-sys` point
-# `cc_lib` at this so bindgen sees only the C ABI surface, never the
-# C++ implementation.  Exposes the snmalloc include root so a bindgen
-# `#include "snmalloc/override/rust.h"` resolves.
-cc_library(
-    name = "snmalloc_rust_headers",
-    hdrs = [
-        "src/snmalloc/override/rust.h",
-        "src/snmalloc/override/rust_profile.h",
-    ],
-    includes = ["src"],
-    visibility = ["//visibility:public"],
 )
 
 config_setting(

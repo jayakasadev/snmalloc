@@ -1,97 +1,19 @@
 # Bazel build file for the `snmalloc-sys` crate.
 #
-# The Cargo build under this directory is preserved verbatim — `build.rs`
-# still drives a CMake compile of the vendored C++ source via the cmake
-# crate.  The Bazel target graph is parallel: the C++ shim is built once
-# by the root `:snmalloc-rs` (and `:snmalloc-rs-profile`) `cmake` rules
-# in rules_foreign_cc, and bindgen is invoked separately by the
-# `rust_bindgen_library` rules below.
+# The crate's hand-written `extern "C"` decls in `src/lib.rs` are
+# consumed verbatim by Bazel — no bindgen step. Two flavours:
 #
-# Two flavours are exposed:
+#   :snmalloc_sys           Links against the no-profile C archive.
+#   :snmalloc_sys_profiling Links against the SNMALLOC_PROFILE=ON archive
+#                           and enables the `profiling` crate feature.
 #
-#   :snmalloc_sys
-#     Default no-profiling build.  Bindgen sees only the core
-#     `sn_rust_(alloc|dealloc|realloc|statistics|usable_size|alloc_zeroed)`
-#     surface; the crate links against the no-profile archive.
-#
-#   :snmalloc_sys_profiling
-#     Profile-enabled.  Bindgen widens to the full `sn_rust_.*` /
-#     `SnRust.*` allowlist; the crate links against the profile archive
-#     (`SNMALLOC_PROFILE=ON`) and sets the `profiling` crate feature.
+# The C archive itself is produced by the rules_foreign_cc `cmake`
+# rules in the root `BUILD.bazel`.
 
-load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_rust//rust:defs.bzl", "rust_library")
-load("@rules_rust_bindgen//:defs.bzl", "rust_bindgen_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# Bindgen requires `header` to live in `cc_lib`'s transitive header set
-# AND for that target to contribute at least one static archive (the
-# rule emits link directives for the resulting Rust crate).  Wrap both
-# `wrapper.h` plus the relevant cmake archive into a single cc_library
-# per profiling flavour.
-cc_library(
-    name = "wrapper_headers",
-    hdrs = ["wrapper.h"],
-    deps = [
-        "//:snmalloc-rs",
-        "//:snmalloc_rust_headers",
-    ],
-)
-
-cc_library(
-    name = "wrapper_headers_profiling",
-    hdrs = ["wrapper.h"],
-    deps = [
-        "//:snmalloc-rs-profile",
-        "//:snmalloc_rust_headers",
-    ],
-)
-
-# Core bindgen surface — `sn_rust_alloc` / `sn_rust_dealloc` /
-# `sn_rust_realloc` / `sn_rust_statistics` / `sn_rust_usable_size` /
-# `sn_rust_alloc_zeroed`.  Used by the non-profiling `:snmalloc_sys`
-# crate.
-rust_bindgen_library(
-    name = "snmalloc_bindings",
-    bindgen_flags = [
-        "--allowlist-function=sn_rust_alloc",
-        "--allowlist-function=sn_rust_alloc_zeroed",
-        "--allowlist-function=sn_rust_dealloc",
-        "--allowlist-function=sn_rust_realloc",
-        "--allowlist-function=sn_rust_statistics",
-        "--allowlist-function=sn_rust_usable_size",
-        "--use-core",
-        "--ctypes-prefix=core::ffi",
-        "--no-layout-tests",
-    ],
-    cc_lib = ":wrapper_headers",
-    header = "wrapper.h",
-)
-
-# Full bindgen surface — adds the `sn_rust_profile_*` calls plus the
-# `SnRustProfileRawSample` struct and the `SNMALLOC_PROFILE_STACK_FRAMES`
-# constant.  Used by the profile-enabled `:snmalloc_sys_profiling` crate.
-rust_bindgen_library(
-    name = "snmalloc_bindings_profiling",
-    bindgen_flags = [
-        "--allowlist-function=sn_rust_.*",
-        "--allowlist-type=SnRust.*",
-        "--allowlist-var=SNMALLOC_PROFILE_STACK_FRAMES",
-        "--use-core",
-        "--ctypes-prefix=core::ffi",
-        "--no-layout-tests",
-    ],
-    cc_lib = ":wrapper_headers_profiling",
-    header = "wrapper.h",
-)
-
-# The crate sources, minus `build.rs` and the bindgen extern decls that
-# `rust_bindgen_library` now provides.  Cargo and Bazel diverge here:
-# Cargo's `build.rs` is what drives the CMake compile + bindgen for
-# Cargo consumers, but under Bazel the cmake archive and bindgen output
-# come from separate rules so `build.rs` would be redundant (and would
-# attempt to re-shell out to cmake from inside a Bazel sandbox).
 _CRATE_SRCS = ["src/lib.rs"]
 
 rust_library(
@@ -99,7 +21,6 @@ rust_library(
     srcs = _CRATE_SRCS,
     edition = "2021",
     deps = [
-        ":snmalloc_bindings",
         "//:snmalloc-rs",
     ],
 )
@@ -110,7 +31,6 @@ rust_library(
     crate_features = ["profiling"],
     edition = "2021",
     deps = [
-        ":snmalloc_bindings_profiling",
         "//:snmalloc-rs-profile",
     ],
 )

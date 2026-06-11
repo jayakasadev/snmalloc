@@ -1,9 +1,9 @@
 name: Bazel build
 
 # Smoke-test that the Bazel target graph keeps working alongside the
-# Cargo build.  We exercise the headers-only cc_library, the bindgen
-# pipeline, the rust_library variants, and at least one rust_test --
-# enough to catch the common regressions in the dual-build layer.
+# Cargo build.  We exercise the rust_library variants and at least
+# one rust_test -- enough to catch the common regressions in the
+# dual-build layer.
 
 on:
   push:
@@ -52,12 +52,6 @@ jobs:
           bazel build \
             //snmalloc-rs/snmalloc-sys:snmalloc_sys \
             //snmalloc-rs/snmalloc-sys:snmalloc_sys_profiling
-
-      - name: Bazel build :: bindgen targets
-        run: |
-          bazel build \
-            //snmalloc-rs/snmalloc-sys:snmalloc_bindings \
-            //snmalloc-rs/snmalloc-sys:snmalloc_bindings_profiling
 
       - name: Bazel test :: snmalloc-rs integration tests
         run: bazel test //snmalloc-rs:all
