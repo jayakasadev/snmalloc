@@ -137,18 +137,25 @@ attempt to disambiguate in this results-publishing PR:
    `profile-on-active` runs come last and may see slightly different
    thermal state than `profile-off`.
 
-Recommended follow-ups (out of scope for this PR — they would touch
-files outside the allowed set):
+## Status
 
-- Soften the README claim from "<1% throughput overhead" to "well under
-  5% overhead at the default sampling rate, averaging ~2.5% across
-  small/medium/mixed allocation workloads".
+The README "<1% overhead at default sampling rate" claim is the design
+target; this measurement does not yet support it on `medium_allocs` and
+`mixed` workloads. The gap is being driven to closure in
+[ClickUp ticket 86aj0hfmc](https://app.clickup.com/t/86aj0hfmc).
+Investigation targets in priority order: cache-line alignment of the
+Sampler hot state, the Phase 3.3 alloc-hook fast path, the dealloc
+null-check predictor behavior, and lazy-provider first-touch costs on
+medium/mixed slabs. Re-run this document after that work lands.
+
+Reproduction caveats worth noting before the perf investigation begins:
+
 - Re-run on a Linux host with `taskset` pinning and `cpufreq` set to
-  `performance` to remove the macOS scheduler variance, and update this
-  document with that companion table.
-- Consider raising `sample_size` on `medium_allocs` and `mixed` so the
-  confidence intervals tighten enough to distinguish a real ~3% overhead
-  from noise.
+  `performance` to remove the macOS scheduler variance.
+- Raise `sample_size` on `medium_allocs` and `mixed` so the confidence
+  intervals tighten enough to distinguish a real ~3% overhead from
+  noise (the std-dev column above shows medium at 324–515 ns vs small
+  at 31 ns).
 
 ## Reproducing
 
