@@ -51,9 +51,8 @@
 // re-entry a cheap no-op.  Adding the include here means the
 // pre-clang-format manual ordering (snmalloc.h before record.h) is
 // no longer load-bearing -- ticket 86aj2dwjz / cleanup PR.
-#include "../snmalloc_core.h"
-
 #include "../ds_core/defines.h"
+#include "../snmalloc_core.h"
 #include "allocation_sample_list.h"
 #include "lifetime_histogram.h"
 #include "node_pool.h"

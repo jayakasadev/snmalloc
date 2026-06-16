@@ -182,12 +182,14 @@ namespace
 
       std::thread ta([&] {
         while (!go.load(std::memory_order_acquire))
-        {}
+        {
+        }
         a_result.store(clear_profile_slot(&slot), std::memory_order_release);
       });
       std::thread tb([&] {
         while (!go.load(std::memory_order_acquire))
-        {}
+        {
+        }
         b_result.store(clear_profile_slot(&slot), std::memory_order_release);
       });
 

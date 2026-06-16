@@ -672,7 +672,7 @@ namespace snmalloc
     }
 
     friend class ThreadAlloc;
-    constexpr Allocator(bool){};
+    constexpr Allocator(bool) {};
 
   public:
     /**
