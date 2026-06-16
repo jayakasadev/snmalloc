@@ -332,12 +332,13 @@ namespace
     // Allocate and free in interleaved sizes that span small + medium
     // sizeclasses.  This stresses the H1 hook over a wider range of
     // PagemapEntry shapes.
-    for (size_t sz : {size_t{16},
-                      size_t{64},
-                      size_t{256},
-                      size_t{1024},
-                      size_t{4096},
-                      size_t{16384}})
+    for (size_t sz :
+         {size_t{16},
+          size_t{64},
+          size_t{256},
+          size_t{1024},
+          size_t{4096},
+          size_t{16384}})
     {
       void* p = snmalloc::libc::malloc(sz);
       if (p != nullptr)
