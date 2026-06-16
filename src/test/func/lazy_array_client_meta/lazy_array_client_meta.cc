@@ -23,8 +23,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
-#include <snmalloc/snmalloc_core.h>
 #include <snmalloc/backend_helpers/commonconfig.h>
+#include <snmalloc/snmalloc_core.h>
 #include <test/setup.h>
 #include <test/snmalloc_testlib.h>
 

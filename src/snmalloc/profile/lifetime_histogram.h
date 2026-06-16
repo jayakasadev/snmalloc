@@ -108,15 +108,14 @@ namespace snmalloc::profile
     {
       if (ns <= 1)
         return 0;
-      // floor(log2(ns)) via 63 - clz.  We've already excluded ns == 0;
-      // for ns == 1 the result is 0 which we return above.
+        // floor(log2(ns)) via 63 - clz.  We've already excluded ns == 0;
+        // for ns == 1 the result is 0 which we return above.
 #if defined(_MSC_VER)
       unsigned long index = 0;
       _BitScanReverse64(&index, ns);
       const size_t b = static_cast<size_t>(index);
 #else
-      const size_t b =
-        static_cast<size_t>(63 - __builtin_clzll(ns));
+      const size_t b = static_cast<size_t>(63 - __builtin_clzll(ns));
 #endif
       return b >= kLifetimeBuckets ? (kLifetimeBuckets - 1) : b;
     }
