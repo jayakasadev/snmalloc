@@ -1,8 +1,21 @@
 load("@rules_cc//cc:defs.bzl", "cc_test")
 
-# will raise `ERROR: AddressSanitizer: SEGV on unknown address` if run without -c opt
-# --config=asan adds AddressSanitizer libs
-# bazel test -c opt --config=asan //fuzzing:snmalloc_fuzzer
+# Fuzz harness for snmalloc::memcpy and the scoped-allocator path.
+#
+# Important: we deliberately do NOT set `malloc = "//:snmalloc"` here.
+# fuzztest's seed-evaluator spawns threads and runs `operator delete`
+# during teardown; when the process-wide allocator is snmalloc AND
+# `-fsanitize=address` is also live, ASAN intercepts the delete on
+# memory that snmalloc owns and SIGSEGVs at SETUP time before any
+# fuzz iteration runs (observed in CI under bazelisk + LLVM 18/19).
+# Routing the test process' malloc/free through the system allocator
+# keeps ASAN's shadow consistent; the snmalloc surface being fuzzed
+# (`snmalloc::memcpy<true>`, `snmalloc::get_scoped_allocator()`,
+# explicit `scoped->alloc<>()` / scoped destructor `free`) is
+# exercised directly via the source under test and remains fully
+# covered.
+#
+# Run with: bazel test -c opt --config=asan //fuzzing:snmalloc_fuzzer
 cc_test(
     name = "snmalloc_fuzzer",
     srcs = ["snmalloc-fuzzer.cpp"],
@@ -17,7 +30,6 @@ cc_test(
         "ADDRESS_SANITIZER",
     ],
     linkstatic = True,
-    malloc = "//:snmalloc",
     deps = [
         "@fuzztest//fuzztest",
         "@fuzztest//fuzztest:fuzztest_gtest_main",
