@@ -84,7 +84,7 @@ namespace
     const double total_bytes = static_cast<double>(N) * R;
     const double expected_samples = total_bytes / static_cast<double>(T);
     const double mean_interval =
-      total_bytes / std::max<size_t>(sample_count, 1);
+      total_bytes / static_cast<double>(std::max<size_t>(sample_count, 1));
 
     std::cout << "    N=" << N << " R=" << R << " T=" << T << "\n";
     std::cout << "    samples=" << sample_count << "  expected~"
