@@ -2,14 +2,14 @@
 
 #include "../ds/ds.h"
 #include "../ds/pool.h"
+#include "../profile/hooks.h"
+#include "alloc_stats.h"
 #include "check_init.h"
 #include "freelist.h"
 #include "metadata.h"
 #include "remotecache.h"
 #include "snmalloc/stl/new.h"
 #include "ticker.h"
-#include "alloc_stats.h"
-#include "../profile/hooks.h"
 
 #if defined(_MSC_VER)
 #  define ALLOCATOR __declspec(allocator) __declspec(restrict)
@@ -191,7 +191,6 @@ namespace snmalloc
     SNMALLOC_NO_UNIQUE_ADDRESS AllocStats alloc_stats{};
 
   private:
-
     /**
      * The message queue needs to be accessible from other threads
      *
@@ -307,7 +306,7 @@ namespace snmalloc
     }
 
     friend class ThreadAlloc;
-    constexpr Allocator(bool) {};
+    constexpr Allocator(bool){};
 
   public:
     /**
