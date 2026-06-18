@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Microbenchmark for the snmalloc frame-pointer stack walker
-// (Phase 2.1 of the heap-profiling milestone, ClickUp 86ahzwhq5).
+// Microbenchmark for the snmalloc frame-pointer stack walker.
 //
 // Builds a recursive call chain of known depth and invokes
 // `snmalloc::profile::DefaultStackWalker::capture()` from the deepest frame.

@@ -16,11 +16,11 @@ namespace snmalloc
     {
       using ContainsParent<ParentRange>::parent;
 
-      // Phase 11.10: cache-line pad to eliminate false-sharing.  Both
-      // counters are bumped on every successful `alloc_range`; without
-      // padding they share a cache line and `peak_usage` is also
-      // CAS-loaded from the same line that `current_usage` was just
-      // written to, costing core-to-core line invalidations.
+      // Cache-line pad to eliminate false-sharing.  Both counters are
+      // bumped on every successful `alloc_range`; without padding they
+      // share a cache line and `peak_usage` is also CAS-loaded from the
+      // same line that `current_usage` was just written to, costing
+      // core-to-core line invalidations.
       alignas(64) static inline stl::Atomic<size_t> current_usage{};
       alignas(64) static inline stl::Atomic<size_t> peak_usage{};
 

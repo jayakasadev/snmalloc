@@ -11,7 +11,7 @@ namespace snmalloc
 {
   /**
    * Process-global log2-bucketed histogram of free chunks held inside
-   * `LargeBuddyRange` instances (Phase 11.4).
+   * `LargeBuddyRange` instances.
    *
    * snmalloc has several `LargeBuddyRange` instantiations active at
    * runtime: the process-singleton `GlobalR` (lifted via
@@ -34,12 +34,11 @@ namespace snmalloc
    *
    * Updates are `memory_order_relaxed`: the counters are not used for
    * synchronisation, only for observability.  Both `Buddy` mutators
-   * and the FullAllocStats reader run while holding their respective
-   * locks, but the histogram itself is unsynchronised; a concurrent
-   * reader may observe a transient inconsistency at the moment a
-   * block consolidates from bucket `idx` to `idx+1` (one bucket may
-   * read low while the other reads high), which we accept for a
-   * telemetry-grade snapshot.
+   * and the reader run while holding their respective locks, but the
+   * histogram itself is unsynchronised; a concurrent reader may observe
+   * a transient inconsistency at the moment a block consolidates from
+   * bucket `idx` to `idx+1` (one bucket may read low while the other
+   * reads high), which we accept for a telemetry-grade snapshot.
    */
   struct LargeBuddyFreeChunkHistogram
   {
@@ -64,9 +63,8 @@ namespace snmalloc
         counts[rel].fetch_add(1, stl::memory_order_relaxed);
       }
 #else
-      // Phase 11.6 -- the backend-path free-chunk histogram is part
-      // of the BASIC tier surface.  Compiles to a no-op when BASIC
-      // is off so Buddy insertion pays zero atomic overhead.
+      // Compiles to a no-op when BASIC stats are off so Buddy
+      // insertion pays zero atomic overhead.
       (void)size_bits;
 #endif
     }
@@ -96,7 +94,7 @@ namespace snmalloc
         }
       }
 #else
-      // Phase 11.6 -- BASIC-only; no-op when BASIC is off.
+      // No-op when BASIC stats are off.
       (void)size_bits;
 #endif
     }
@@ -330,11 +328,11 @@ namespace snmalloc
       /**
        * Buddy allocator used to represent this range of memory.
        *
-       * The fourth template argument plugs the Phase 11.4 free-chunk
-       * histogram hook in -- every insertion/removal into the buddy
-       * cache or red-black tree bumps the matching log-size bucket of
-       * `LargeBuddyFreeChunkHistogram`, which the FullAllocStats
-       * getter then reads via `get_free_chunk_count_by_log_size`.
+       * The fourth template argument plugs in the free-chunk histogram
+       * hook: every insertion/removal into the buddy cache or red-black
+       * tree bumps the matching log-size bucket of
+       * `LargeBuddyFreeChunkHistogram`, which
+       * `get_free_chunk_count_by_log_size` then reads.
        */
       Buddy<
         BuddyChunkRep<Pagemap>,
@@ -511,16 +509,15 @@ namespace snmalloc
 
       /**
        * Snapshot the process-global log2-bucketed free-chunk histogram
-       * for `LargeBuddyRange` instances (Phase 11.4).
+       * for `LargeBuddyRange` instances.
        *
        * The histogram aggregates free-chunk populations across EVERY
        * live `LargeBuddyRange` Buddy in the process -- the
        * single-instance `GlobalR` plus every per-thread local cache --
        * so the snapshot does not vary across `Type` instantiations.
        * The method is provided as an instance accessor on `Type` to
-       * match the rest of the range API surface and to give the
-       * FullAllocStats getter a uniform call shape regardless of which
-       * range it is querying.
+       * match the rest of the range API surface and to give callers a
+       * uniform call shape regardless of which range they are querying.
        *
        * `out[i]` corresponds to chunks of size
        * `1 << (MIN_CHUNK_BITS + i)` bytes for `i` in

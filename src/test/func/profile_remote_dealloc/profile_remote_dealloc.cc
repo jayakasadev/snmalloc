@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 3.2 unit tests for the H2 remote-dealloc profile hook.
+// Unit tests for the remote-dealloc profile hook.
 //
-// H2 lives inside `Allocator::handle_dealloc_remote` (corealloc.h:~501),
-// guarding the splice that hands a forwarded RemoteMessage back to the
-// destination thread's local free queue via `dealloc_local_objects_fast`.
-// These tests cover:
+// The remote-dealloc hook lives inside
+// `Allocator::handle_dealloc_remote` (corealloc.h:~501), guarding the
+// splice that hands a forwarded RemoteMessage back to the destination
+// thread's local free queue via `dealloc_local_objects_fast`.  These
+// tests cover:
 //
 //   1. Single-threaded baseline: alloc + free without SNMALLOC_PROFILE
 //      defined behaves identically (smoke test; the hook is a compile-time
 //      no-op for the default Config either way).
-//   2. H1 + H2 idempotence on cross-thread free: a slot populated by an
-//      explicit `publish_sample` is cleared at most once even if both H1
-//      (source thread) and H2 (destination thread) fire on the same
+//   2. Dealloc-hook idempotence on cross-thread free: a slot populated by
+//      an explicit `publish_sample` is cleared at most once even if both
+//      the source-thread and destination-thread hooks fire on the same
 //      pointer.  Verified by checking that `clear_profile_slot` returns
 //      non-null exactly once when called twice in sequence.
 //   3. Stress: 4 producer + 4 consumer threads exchange allocations.
@@ -20,15 +21,15 @@
 //      forcing every freed pointer through the remote-dealloc path on
 //      the owning thread.  We verify: no crash, no leak (final live
 //      count is zero), and that the global SampledList is empty at the
-//      end so neither H1 nor H2 stranded any nodes.
+//      end so neither hook stranded any nodes.
 //   4. Default-config compile-time guard: `record_dealloc<Config>` for
-//      the default `snmalloc::Config` is a no-op regardless of whether
-//      H1 or H2 calls it.  This pins the byte-identical-OFF claim.
+//      the default `snmalloc::Config` is a no-op regardless of which
+//      dealloc hook calls it.  This pins the byte-identical-OFF claim.
 //
 // The tests exercise only the publicly-exposed `snmalloc::libc::*`
 // surface plus the profile primitives (clear_profile_slot, SampledList,
 // NodePool).  We deliberately do NOT construct a Config that wires the
-// lazy provider into a real Backend: that integration is Phase 3.3.
+// lazy provider into a real Backend.
 
 #include <atomic>
 #include <cstddef>
@@ -94,8 +95,8 @@ namespace
 
   // =========================================================================
   // Test 1: single-threaded baseline -- alloc + free does not crash, and
-  //         the H2 hook (compiled in when SNMALLOC_PROFILE is on, absent
-  //         when off) is invisible to the default config.
+  //         the remote-dealloc hook (compiled in when SNMALLOC_PROFILE is
+  //         on, absent when off) is invisible to the default config.
   // =========================================================================
   void test_singlethread_baseline()
   {
@@ -119,11 +120,11 @@ namespace
   }
 
   // =========================================================================
-  // Test 2: H1+H2 idempotence -- two sequential clears of one populated
-  //         slot.  The first wins, the second is a safe no-op.  This is
-  //         the exact contract that lets H2 fire defensively on the
-  //         destination thread without double-freeing a SampledAlloc
-  //         already returned to the pool by H1.
+  // Test 2: dealloc-hook idempotence -- two sequential clears of one
+  //         populated slot.  The first wins, the second is a safe no-op.
+  //         This is the exact contract that lets the destination-thread
+  //         hook fire defensively without double-freeing a SampledAlloc
+  //         already returned to the pool by the source-thread hook.
   // =========================================================================
   void test_h1_h2_idempotence()
   {
@@ -139,14 +140,14 @@ namespace
     const size_t live_pre = SamplerGlobals::list().debug_count();
     check(live_pre >= 1, "live count >= 1 before any clear");
 
-    // Simulate H1 on source thread.
+    // Simulate the source-thread hook.
     SampledAlloc* first = clear_profile_slot(&slot);
     check(first == node, "first clear (H1) wins and returns the node");
     check(
       slot.load(std::memory_order_relaxed) == nullptr,
       "slot is null after H1 clear");
 
-    // Simulate H2 on destination thread for the same forwarded pointer.
+    // Simulate the destination-thread hook for the same forwarded pointer.
     SampledAlloc* second = clear_profile_slot(&slot);
     check(
       second == nullptr, "second clear (H2) is a no-op -- no double release");
@@ -163,8 +164,9 @@ namespace
   // Test 3: cross-thread dealloc stress.  4 producer threads allocate
   //         buffers and hand them to 4 consumer threads, which free them.
   //         Every free is therefore a cross-thread free, exercising the
-  //         remote-message machinery that H2 instruments.  We assert no
-  //         crash and no leak in the global SampledList.
+  //         remote-message machinery that the remote-dealloc hook
+  //         instruments.  We assert no crash and no leak in the global
+  //         SampledList.
   // =========================================================================
   struct CrossThreadQueue
   {
@@ -280,9 +282,9 @@ namespace
 
   // =========================================================================
   // Test 4: default-config compile-time no-op.  The default Config does
-  //         NOT carry the lazy provider, so both H1 and H2 must compile
-  //         away.  A successful build of this TU already proves it; we
-  //         additionally call the hook to confirm runtime no-op.
+  //         NOT carry the lazy provider, so both dealloc hooks must
+  //         compile away.  A successful build of this TU already proves
+  //         it; we additionally call the hook to confirm runtime no-op.
   // =========================================================================
   void test_default_config_compiletime_noop()
   {
@@ -294,8 +296,8 @@ namespace
       "ProfileSlot> -- the OFF-build byte-identical invariant depends on it");
 
     int sentinel = 0;
-    // The H2 site calls record_dealloc<Config>(msg.unsafe_ptr()); we
-    // invoke the same path here with a sentinel pointer.
+    // The remote-dealloc site calls record_dealloc<Config>(msg.unsafe_ptr());
+    // we invoke the same path here with a sentinel pointer.
     record_dealloc<snmalloc::Config>(&sentinel);
     record_dealloc<snmalloc::Config>(nullptr);
 

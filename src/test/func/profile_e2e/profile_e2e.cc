@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 3.3 end-to-end tests for the alloc-side heap-profile hook.
+// End-to-end tests for the alloc-side heap-profile hook.
 //
 // These tests exercise the full sampler-on-real-allocator pipeline:
 //
@@ -11,16 +11,16 @@
 //      shims; the alloc hook at globalalloc.h ticks the per-thread
 //      sampler and, on a sample fire, stashes a SampledAlloc into the
 //      per-object profile slot.
-//   3. Free those allocations; the H1 hook at corealloc.h pulls the
-//      SampledAlloc out of the slot, removes it from the global
-//      SampledList, and returns it to the NodePool.
+//   3. Free those allocations; the main-path dealloc hook at
+//      corealloc.h pulls the SampledAlloc out of the slot, removes it
+//      from the global SampledList, and returns it to the NodePool.
 //
 // We assert:
 //   - The sampler fires roughly at the configured rate (within
 //     ample tolerance for a tens-of-thousands-of-alloc run).
 //   - Every sample carries a populated stack and a real alloc_addr.
-//   - After freeing all allocations the SampledList is empty -- H1
-//     correctly drained every published node.
+//   - After freeing all allocations the SampledList is empty -- the
+//     dealloc hook correctly drained every published node.
 //   - Multi-threaded allocs converge to the same accuracy bound.
 //
 // NB: this TU sets up its own `snmalloc::Config` before including
@@ -177,7 +177,8 @@ namespace
     check(all_have_addr, "every sample has a non-zero alloc_addr");
     check(all_have_size, "every sample's requested_size matches OBJ_SIZE");
 
-    // Free everything; H1 should drain the list back to empty.
+    // Free everything; the dealloc hook should drain the list back to
+    // empty.
     for (auto* p : ptrs)
       snmalloc::libc::free(p);
 

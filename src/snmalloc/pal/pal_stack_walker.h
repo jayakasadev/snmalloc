@@ -3,12 +3,8 @@
 /**
  * Stack-walker primitive used by the heap-profiling subsystem.
  *
- * Phase 2.1 of the heap-profiling milestone (ClickUp 86ahzwhq5).
- *
  * Provides a frame-pointer walker on x86_64 / aarch64 + Linux/macOS, and a
- * null walker fallback for all other targets. The walker is purely additive
- * in this commit: it is NOT yet wired into any allocator path, NOT gated on
- * a profile build flag, and does not alter existing behaviour.
+ * null walker fallback for all other targets.
  *
  * Properties of the FP walker:
  *   - Async-signal-safe. No malloc, no locks, no syscalls, no TLS
@@ -23,16 +19,15 @@
  *     free on non-PAC hardware) -- whether saved LRs carry PAC bits depends
  *     on kernel/userspace state the allocator does not know at compile time.
  *
- * Selection is at compile time via the C/C++ preprocessor only -- no new
- * CMake option in this commit. The default policy is:
+ * Selection is at compile time via the C/C++ preprocessor only. The default
+ * policy is:
  *
  *   - aarch64 / x86_64 on Linux / macOS: frame-pointer walker.
  *   - everything else (Windows, FreeBSD, OpenEnclave, CHERI/Morello, other
  *     archs): null walker that returns 0 frames.
  *
- * A CMake-level `SNMALLOC_PROFILE_STACK_WALKER` override (fp/null/auto) and
- * the matching `-fno-omit-frame-pointer` injection for snmalloc TUs are
- * deferred to a follow-up. See bottom of file for the override hook.
+ * Callers may force a specific walker via the override hooks at the top of
+ * the file.
  */
 
 #include "../ds_core/defines.h"
@@ -45,8 +40,8 @@
 // Override hooks
 // ---------------------------------------------------------------------------
 //
-// Callers (or a future CMake plumbing layer) may force a specific walker by
-// defining one of these before including this header:
+// Callers may force a specific walker by defining one of these before
+// including this header:
 //
 //   SNMALLOC_PROFILE_STACK_WALKER_FP    -- use the FP walker unconditionally
 //   SNMALLOC_PROFILE_STACK_WALKER_NULL  -- use the null walker unconditionally
@@ -81,10 +76,9 @@ namespace snmalloc
    *
    * This is a flag value, separate from `PalFeatures`, used by callers that
    * want to opt out gracefully when running on a PAL whose walker is the
-   * no-op stub. It is intentionally not folded into `PalFeatures` in this
-   * commit -- the walker isn't yet plumbed into any consumer that needs the
-   * `pal_supports<>` SFINAE shape, and adding a flag bit there now would
-   * be premature.
+   * no-op stub. It is intentionally not folded into `PalFeatures`, which
+   * would require the `pal_supports<>` SFINAE shape that no current consumer
+   * needs.
    */
   enum class StackWalkerKind : uint8_t
   {

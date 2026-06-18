@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 3.1 unit tests for snmalloc::profile::record_dealloc and its
-// extracted slot-cleanup helper (clear_profile_slot).
+// Unit tests for snmalloc::profile::record_dealloc and its extracted
+// slot-cleanup helper (clear_profile_slot).
 //
 // The tests cover:
 //   1. clear_profile_slot is a no-op on a null slot.
@@ -18,9 +18,9 @@
 //      default config still uses NoClientMetaDataProvider.
 //
 // We deliberately do NOT instantiate a Config that wires the lazy
-// provider into a real Backend: Phase 3.1's scope ends at the hook
+// provider into a real Backend: this test's scope ends at the hook
 // surface.  Pagemap-level integration (and full alloc-side wiring) is
-// Phase 3.3.
+// covered by the integration tests.
 
 // snmalloc.h must come before any profile/ headers so the
 // LazyArrayClientMetaDataProvider declaration in commonconfig.h is
@@ -182,14 +182,12 @@ namespace
 
       std::thread ta([&] {
         while (!go.load(std::memory_order_acquire))
-        {
-        }
+        {}
         a_result.store(clear_profile_slot(&slot), std::memory_order_release);
       });
       std::thread tb([&] {
         while (!go.load(std::memory_order_acquire))
-        {
-        }
+        {}
         b_result.store(clear_profile_slot(&slot), std::memory_order_release);
       });
 

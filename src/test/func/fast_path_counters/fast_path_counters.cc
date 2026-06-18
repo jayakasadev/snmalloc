@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 9.2 (ClickUp 86aj0tr1e) -- per-thread frontend cache stats.
+// Per-thread frontend cache stats.
 //
 // Verifies the alloc/dealloc counter wiring in
 // `src/snmalloc/mem/corealloc.h` by:
@@ -24,10 +24,10 @@
 // `src/snmalloc/override/stats_export.cc`, which is only compiled into
 // the libsnmalloc shims, not the per-test executables.
 
-// Phase 11.6 -- this test exercises only the BASIC (FrontendStats)
-// counters and so is gated on SNMALLOC_STATS_BASIC.  Both
-// `SNMALLOC_STATS=ON` (legacy alias) and `SNMALLOC_STATS_FULL=ON`
-// implicitly enable BASIC and therefore reach the assertions below.
+// This test exercises only the BASIC (FrontendStats) counters and so is
+// gated on SNMALLOC_STATS_BASIC.  Both `SNMALLOC_STATS=ON` (legacy alias)
+// and `SNMALLOC_STATS_FULL=ON` implicitly enable BASIC and therefore reach
+// the assertions below.
 #ifdef SNMALLOC_STATS_BASIC
 #  include <atomic>
 #  include <iostream>
@@ -55,7 +55,7 @@ int main(int /*argc*/, char** /*argv*/)
 
 namespace
 {
-  // Local equivalent of the `snmalloc_get_full_stats` 9.2 block in
+  // Local equivalent of the `snmalloc_get_full_stats` aggregation in
   // `src/snmalloc/override/stats_export.cc`.  Defined here so the
   // test does not need to link the libsnmalloc-shim TU.
   snmalloc::FrontendStats snapshot()
@@ -118,8 +118,8 @@ int main(int /*argc*/, char** /*argv*/)
   }
 
   auto after_alloc = snapshot();
-  // Phase 11.12 -- decode via accessors; the underlying field is
-  // now a single packed 64-bit word.
+  // Decode via accessors; the underlying field is a single packed
+  // 64-bit word.
   uint64_t alloc_delta =
     after_alloc.fast_path_allocs() - before.fast_path_allocs();
   // Every slow refill consumes one "missed fast-path" slot (the
@@ -139,11 +139,11 @@ int main(int /*argc*/, char** /*argv*/)
   ptrs.clear();
 
   auto after_dealloc = snapshot();
-  // Phase 11.9: fast_path_deallocs is pre-credited at small_refill
-  // (alloc-time batching, symmetric with fast_path_allocs). The
-  // counter therefore rises during the alloc phase, not the dealloc
-  // phase. Measure from `before` rather than `after_alloc` so the
-  // pre-credit lands inside the measurement window.
+  // fast_path_deallocs is pre-credited at small_refill (alloc-time
+  // batching, symmetric with fast_path_allocs). The counter therefore
+  // rises during the alloc phase, not the dealloc phase. Measure from
+  // `before` rather than `after_alloc` so the pre-credit lands inside
+  // the measurement window.
   uint64_t dealloc_delta =
     after_dealloc.fast_path_deallocs - before.fast_path_deallocs;
   // Each refill pre-credits the dealloc counter by the refill

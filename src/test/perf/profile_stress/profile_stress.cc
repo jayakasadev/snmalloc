@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 7.4 -- snapshot-under-churn stress test for the heap profile.
+// Snapshot-under-churn stress test for the heap profile.
 //
 // TSan-clean by construction (no shared mutable state outside snmalloc
 // internals).  All worker / sampler synchronisation goes through
@@ -67,9 +67,9 @@ namespace snmalloc
 {
   // Profile-enabled Config: lazy array provider that stores a
   // std::atomic<SampledAlloc*> per allocation.  This flips
-  // config_has_profile_slot_v<Config> to true so the H1-H4 dealloc
-  // hooks and the alloc-side sampler hook do real work.  Same pattern
-  // used by src/test/func/profile_e2e/profile_e2e.cc and
+  // config_has_profile_slot_v<Config> to true so the dealloc hooks and
+  // the alloc-side sampler hook do real work.  Same pattern used by
+  // src/test/func/profile_e2e/profile_e2e.cc and
   // profile_integration.cc.
   using Config = snmalloc::StandardConfigClientMeta<
     LazyArrayClientMetaDataProvider<std::atomic<profile::SampledAlloc*>>>;
@@ -90,7 +90,7 @@ namespace
   constexpr auto kSamplerInterval = std::chrono::milliseconds(10);
   // Tight sampling rate so every iteration of the worker loop has a real
   // chance of installing a sample.  4 KiB is the same rate used in the
-  // Phase 3.x e2e / streaming tests.
+  // e2e / streaming tests.
   constexpr size_t kSamplingRate = 4096;
 
   // Size mix per task spec.  Cycled per-iteration in each worker.
@@ -117,7 +117,7 @@ namespace
   // -----------------------------------------------------------------------
   // Worker: tight alloc/free loop for the full run duration.  Each
   // allocation goes through snmalloc::libc::malloc, which is the same
-  // surface the H1-H4 hooks instrument.  We free immediately so the
+  // surface the dealloc hooks instrument.  We free immediately so the
   // worker does not accumulate live samples; the goal is *churn* over
   // the SampledList push/remove pair, not retention.
   //

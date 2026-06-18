@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 5.1 streaming-mode broadcast test.
+// Streaming-mode broadcast test.
 //
 // `AllocationSampleList::broadcast()` is invoked from `record_alloc` for
 // every sampled allocation, in addition to the existing SampledList

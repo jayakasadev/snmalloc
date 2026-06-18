@@ -636,8 +636,8 @@ namespace snmalloc
      * stash (a recycled slab may have had fewer than `slab_object_count`
      * entries enqueued). The overshoot is bounded by the slab object count
      * (at most ~256 for the smallest sizeclasses) and is consumed by the
-     * Phase 11.8 batched `fast_path_allocs` pre-credit, which permits a
-     * bounded stale-ahead reading for observability.
+     * batched `fast_path_allocs` pre-credit, which permits a bounded
+     * stale-ahead reading for observability.
      *
      * If Randomisation is not used, the second component will always be
      * false (the closed list contains everything in the builder), but with
@@ -674,11 +674,10 @@ namespace snmalloc
       // This will be zero if there is no randomisation.
       auto sleeping = meta->set_sleeping(sizeclass, remaining);
 
-      // Phase 11.8: report the refill count for batched
-      // `fast_path_allocs` pre-credit. Computed as
-      // `slab_object_count - remaining`; exact for freshly-built
-      // slabs and an upper bound (bounded by slab object count) for
-      // recycled slabs from the per-sizeclass stash.
+      // Report the refill count for the batched `fast_path_allocs`
+      // pre-credit. Computed as `slab_object_count - remaining`; exact
+      // for freshly-built slabs and an upper bound (bounded by slab
+      // object count) for recycled slabs from the per-sizeclass stash.
       refill_count = static_cast<uint16_t>(
         sizeclass_to_slab_object_count(sizeclass) - remaining);
 

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 9.6 -- text-dump implementation.
+// Text-dump implementation.
 //
-// Pure formatter over `snmalloc_get_full_stats` (Phase 9.1).  Output
-// shape mirrors tcmalloc's `MallocExtension::GetStats` text:
+// Pure formatter over `snmalloc_get_full_stats`.  Output shape mirrors
+// tcmalloc's `MallocExtension::GetStats` text:
 //
 //   ------------------------------------------------
 //   MALLOC:    ....... (   ..  MiB) Bytes in use by application
@@ -174,9 +174,9 @@ namespace
   }
 
   /// Map a size-class slot index to the byte size it represents.
-  /// The 9.3 ticket indexes by `smallsizeclass_t`, so we delegate
-  /// to `snmalloc::sizeclass_to_size`.  Out-of-range slots (no
-  /// such class on this configuration) return 0.
+  /// Slots are indexed by `smallsizeclass_t`, so we delegate to
+  /// `snmalloc::sizeclass_to_size`.  Out-of-range slots (no such
+  /// class on this configuration) return 0.
   static uint64_t sizeclass_slot_to_bytes(unsigned slot)
   {
     if (slot >= snmalloc::NUM_SMALL_SIZECLASSES)
@@ -257,8 +257,8 @@ namespace
     // Emit a row for each class whose Live, TotalAllocs, or
     // TotalDeallocs counter is non-zero.  Skips the whole section
     // when every class is empty -- this matters in non-stats builds
-    // where the 9.3 instrumentation is compiled out and every slot
-    // is zero.
+    // where the per-class instrumentation is compiled out and every
+    // slot is zero.
     bool any_class = false;
     for (unsigned i = 0; i < SNMALLOC_FULL_STATS_SIZECLASS_SLOTS; ++i)
     {

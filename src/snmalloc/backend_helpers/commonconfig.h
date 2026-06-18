@@ -121,8 +121,7 @@ namespace snmalloc
    * frontend `FrontendSlabMetadata` and `globalalloc.h` callers) currently
    * invoke `ClientMeta::get(StorageType*, size_t)`.  Wiring this provider
    * up requires threading the per-slab object count from the pagemap entry
-   * through `get_meta_for_object` to `get(StorageType*, size_t, size_t)`;
-   * see Phase 3 for the integration work.
+   * through `get_meta_for_object` to `get(StorageType*, size_t, size_t)`.
    *
    * `StorageType` is default-constructible (the atomic pointer is value-
    * initialised to null), matching the placement-new contracts in
@@ -144,9 +143,9 @@ namespace snmalloc
      * Inline per-slab storage: one atomic pointer to the lazily-allocated
      * backing array.  Value-initialised to nullptr on construction so the
      * provider can detect "not yet materialised" with a single relaxed
-     * load.  Sized to exactly one pointer; per Q1 we deliberately do not
-     * cache the object count here (it is recovered from the pagemap
-     * sizeclass and threaded through `get`).
+     * load.  Sized to exactly one pointer; we deliberately do not cache
+     * the object count here (it is recovered from the pagemap sizeclass
+     * and threaded through `get`).
      */
     struct StorageType
     {
@@ -238,7 +237,7 @@ namespace snmalloc
      * This signature is a deliberate extension of the structural
      * `ClientMeta::get(StorageType*, size_t)` contract honoured by
      * `NoClientMetaDataProvider` and `ArrayClientMetaDataProvider`.
-     * Wiring this provider into a `Config` (Phase 3) requires extending
+     * Wiring this provider into a `Config` requires extending
      * `FrontendSlabMetadata::get_meta_for_object` to forward the count.
      */
     static DataRef
