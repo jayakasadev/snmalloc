@@ -1,5 +1,4 @@
-//! Integration tests for the safe Rust profile snapshot wrapper
-//! introduced in Phase 4.1.
+//! Integration tests for the safe Rust profile snapshot wrapper.
 //!
 //! These tests are written so they compile and pass in BOTH
 //! configurations:
@@ -12,9 +11,9 @@
 //! the documented "empty profile / unsupported / zero rate" contract.
 //!
 //! In the ON build, `profiling_supported()` returns `true`, the
-//! sampling rate is settable, and -- as of Phase 4.2 -- the underlying
-//! C++ shim (`src/snmalloc/override/rust.cc`) is compiled with a
-//! profile-enabled `snmalloc::Config` whose `ClientMeta` is
+//! sampling rate is settable, and the underlying C++ shim
+//! (`src/snmalloc/override/rust.cc`) is compiled with a profile-enabled
+//! `snmalloc::Config` whose `ClientMeta` is
 //! `LazyArrayClientMetaDataProvider<std::atomic<SampledAlloc*>>`.  The
 //! alloc/dealloc hooks therefore do real work and `live_sampling_run`
 //! below exercises the full pipeline end-to-end.
@@ -98,7 +97,7 @@ fn sampling_rate_roundtrips_when_supported() {
     a.set_sampling_rate(saved);
 }
 
-/// Live sampling end-to-end test (Phase 4.2).  Allocates
+/// Live sampling end-to-end test.  Allocates
 /// 100_000 x 64B objects with the sampling rate set to 4 KiB and
 /// asserts the resulting snapshot contains
 /// ~ 100_000 * 64 / 4096 = ~1562 samples within a 6-sigma Poisson
@@ -156,7 +155,7 @@ fn live_sampling_run() {
          ({sigma:.1}); window = [{low:.1}, {high:.1}]"
     );
 
-    // Free everything; the H1 dealloc hook should clear each per-object
+    // Free everything; the dealloc hook should clear each per-object
     // slot and remove the matching SampledAlloc from the global list.
     for p in ptrs {
         unsafe { a.dealloc(p, layout) };

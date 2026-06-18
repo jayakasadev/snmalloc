@@ -1,4 +1,4 @@
-//! Phase 9.7 -- runtime tunables.
+//! Integration tests for the runtime tunables.
 //!
 //! Each tunable is a process-wide singleton.  Cargo runs `#[test]`s
 //! within a binary in parallel by default, so two roundtrip tests

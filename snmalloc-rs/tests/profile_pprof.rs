@@ -1,4 +1,4 @@
-//! Phase 6.1 -- integration tests for the pprof Profile encoder
+//! Integration tests for the pprof Profile encoder
 //! ([`HeapProfile::write_pprof`]).
 //!
 //! Three tests:

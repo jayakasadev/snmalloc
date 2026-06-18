@@ -1,4 +1,4 @@
-//! Integration tests for the realloc event hook (ticket 86aj0hk9y).
+//! Integration tests for the realloc event hook.
 //!
 //! Exercises the Rust-side view of `record_realloc` on the in-place
 //! realloc fast path:
@@ -38,8 +38,8 @@ fn session_lock() -> &'static Mutex<()> {
 /// reallocs through the snmalloc allocator directly (via `GlobalAlloc`
 /// + the `realloc` method).  The `realloc` method funnels through
 /// `sn_rust_realloc`, which uses the same in-place fast path that
-/// `snmalloc::libc::realloc` does -- both of which now invoke the
-/// `record_realloc` hook (ticket 86aj0hk9y).
+/// `snmalloc::libc::realloc` does -- both of which invoke the
+/// `record_realloc` hook.
 ///
 /// We use the `SnMalloc` adapter directly rather than relying on the
 /// global allocator wiring: integration tests are compiled without

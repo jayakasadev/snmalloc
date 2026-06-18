@@ -1,5 +1,4 @@
-//! Phase 4.4 integration tests for the snmalloc heap-profile
-//! symbolicator.
+//! Integration tests for the snmalloc heap-profile symbolicator.
 //!
 //! Two halves:
 //!

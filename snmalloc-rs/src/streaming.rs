@@ -1,5 +1,5 @@
-//! Safe Rust wrapper over the streaming-mode FFI surface added in
-//! Phase 5.1 (`sn_rust_profile_streaming_start` /
+//! Safe Rust wrapper over the streaming-mode FFI surface
+//! (`sn_rust_profile_streaming_start` /
 //! `sn_rust_profile_streaming_stop`).  The C side broadcasts every
 //! sampled allocation through a single registered C function pointer;
 //! this module lifts that into:
@@ -49,7 +49,7 @@ use snmalloc_sys::SnRustProfileRawSample;
 
 /// Streaming sample-event kind.  Distinguishes the original alloc-time
 /// broadcast from a Resize broadcast emitted by the in-place realloc
-/// hook (ticket 86aj0hk9y).
+/// hook.
 ///
 /// - [`EventKind::Alloc`] -- a fresh sampled allocation.  Snapshot
 ///   consumers always observe this kind; streaming consumers observe

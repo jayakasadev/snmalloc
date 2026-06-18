@@ -1,4 +1,4 @@
-//! Phase 4.5 integration tests for [`SnMalloc::init_profiling_from_env`]
+//! Integration tests for [`SnMalloc::init_profiling_from_env`]
 //! and [`SnMalloc::configure_profiling`].
 //!
 //! Manipulating process environment variables is a global side effect.

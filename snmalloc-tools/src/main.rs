@@ -8,7 +8,7 @@
 //! - `pmu-join cache-misses` — join `perf script` samples to alloc sites
 //! - `pmu-join c2c`          — join `perf c2c report` to alloc sites
 //! - `branch-misses`         — cross-reference `perf script` with the
-//!                             Phase 10.2 branch-hint inventory
+//!                             branch-hint inventory
 //!
 //! ## Live-process limitation
 //!
@@ -56,7 +56,7 @@ enum Cmd {
     /// Join external perf output with snmalloc allocation metadata.
     PmuJoin(PmuJoinArgs),
     /// Cross-reference `perf script` branch-miss samples with the
-    /// Phase 10.2 branch-hint inventory.
+    /// branch-hint inventory.
     BranchMisses(BranchMissesArgs),
     /// Stream-parse a snmalloc streaming event log and emit a per-site
     /// rate report (alloc/dealloc counts, peak live bytes, alloc rate).
@@ -149,7 +149,7 @@ struct BranchMissesArgs {
     /// Path to the `perf script` output to parse.
     #[arg(long = "perf-script")]
     perf_script: PathBuf,
-    /// Path to the `branch_hints.json` sidecar (Phase 10.2).
+    /// Path to the `branch_hints.json` sidecar.
     #[arg(long)]
     hints: PathBuf,
     /// Number of top hint sites to print.

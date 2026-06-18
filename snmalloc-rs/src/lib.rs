@@ -83,20 +83,20 @@ use core::{
 /// see [`profile`] for details.
 pub mod profile;
 
-/// Runtime configuration helpers (Phase 4.5): a typed [`ProfileConfig`]
-/// struct plus an env-var-driven initializer
+/// Runtime configuration helpers: a typed [`ProfileConfig`] struct
+/// plus an env-var-driven initializer
 /// ([`SnMalloc::init_profiling_from_env`]) so binaries can opt into
 /// heap profiling at the command line without recompiling.  See
 /// [`config`] for the env-var contract.
 pub mod config;
 
-/// Text-dump API (Phase 9.6) -- safe Rust wrapper around the
+/// Text-dump API -- safe Rust wrapper around the
 /// `snmalloc_dump_stats_to_buffer` C ABI.  Two-phase
 /// (size-query + alloc + fill) write into a borrowed
 /// `std::io::Write` sink.  See [`SnMalloc::dump_stats`].
 pub mod stats_dump;
 
-/// Google pprof Profile protobuf encoder (Phase 6.1).
+/// Google pprof Profile protobuf encoder.
 ///
 /// Hand-rolled protobuf3 encoder (no `prost` dependency) covering
 /// the subset of [`pprof`](https://github.com/google/pprof) the
@@ -106,7 +106,7 @@ pub mod stats_dump;
 /// [`HeapProfile::write_pprof`] convenience wrapper.
 pub(crate) mod pprof;
 
-/// Streaming-mode safe Rust wrapper (Phase 5.2).
+/// Streaming-mode safe Rust wrapper.
 ///
 /// Lifts the C-level `sn_rust_profile_streaming_*` FFI surface into
 /// an RAII [`streaming::ProfilingSession`] handle plus a borrowed
@@ -117,7 +117,7 @@ pub(crate) mod pprof;
 #[cfg(feature = "profiling")]
 pub mod streaming;
 
-/// Criterion bench-profiling helper (ticket 86aj2dww6).
+/// Criterion bench-profiling helper.
 ///
 /// Provides [`criterion::bench_with_profile`] and
 /// [`criterion::bench_with_profile_batched`], thin wrappers around a
@@ -134,18 +134,18 @@ pub use profile::{BtSample, Frames, HeapProfile, HotSite, HotSpotKey, Weight};
 pub use profile::clear_symbol_cache;
 pub use config::{ProfileConfig, ENV_PROFILE_ENABLE, ENV_PROFILE_RATE};
 
-/// Re-export of the Phase 9.1 wire-format version constant.  Lets
-/// downstream consumers compare against `FullAllocStats::version`
-/// without depending on the `snmalloc-sys` crate directly.
+/// Re-export of the wire-format version constant.  Lets downstream
+/// consumers compare against `FullAllocStats::version` without
+/// depending on the `snmalloc-sys` crate directly.
 ///
-/// Bumped to `2` in Phase 11.4 with the addition of the free-chunk
-/// histogram in `FullAllocStats.reserved[0..16]`; see
-/// [`SnMalloc::full_stats`] and [`FullAllocStats::free_chunk_histogram`].
+/// Version `2` added the free-chunk histogram in
+/// `FullAllocStats.reserved[0..16]`; see [`SnMalloc::full_stats`] and
+/// [`FullAllocStats::free_chunk_histogram`].
 #[cfg(feature = "stats-basic")]
 pub use ffi::SNMALLOC_FULL_STATS_VERSION;
 
-/// Re-export of the Phase 11.4 free-chunk histogram bucket count.
-/// Equal to `16`.  See [`FullAllocStats::free_chunk_histogram`].
+/// Re-export of the free-chunk histogram bucket count.  Equal to `16`.
+/// See [`FullAllocStats::free_chunk_histogram`].
 #[cfg(feature = "stats-basic")]
 pub use ffi::SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS;
 
@@ -164,25 +164,13 @@ pub struct AllocStats {
     pub peak_memory_usage: usize,
 }
 
-/// Aggregated allocator telemetry snapshot (Phase 9.1 scaffold).
+/// Aggregated allocator telemetry snapshot.
 ///
 /// Idiomatic Rust mirror of `struct snmalloc_full_stats` from the C
 /// header `src/snmalloc/global/stats_export.h`.  Field semantics are
 /// documented on the FFI struct
 /// [`snmalloc_sys::snmalloc_full_stats`]; the Rust mirror exists so
 /// callers don't need to depend on the `snmalloc-sys` crate directly.
-///
-/// At the scaffold stage only `version`, `bytes_in_use`, and
-/// `peak_bytes_in_use` carry meaningful values; every other field is
-/// zero.  Subsequent Phase 9 tickets populate the remaining fields:
-///
-///   * 9.2 -- fast/slow path alloc/dealloc and cross-thread message
-///            counters;
-///   * 9.3 -- per-size-class live / cumulative byte and count
-///            histograms;
-///   * 9.4 -- `bytes_mapped` / `bytes_committed` /
-///            `bytes_decommitted_to_os`;
-///   * 9.5 -- `lifetime_buckets_ns` allocation-lifetime histogram.
 ///
 /// The struct is `Copy` and `Default` (all-zero) so callers can
 /// trivially compute diffs across two snapshots.  Available only
@@ -191,9 +179,9 @@ pub struct AllocStats {
 /// `full_stats()` does not exist (compile-time gate, not a
 /// runtime-zero stub).
 ///
-/// Phase 11.6 -- tiered stats.  The struct layout is identical
-/// across the two tiers (ABI preserved); fields that the BASIC
-/// tier does not maintain simply read as zero.  Specifically:
+/// Stats are tiered.  The struct layout is identical across the two
+/// tiers (ABI preserved); fields that the BASIC tier does not maintain
+/// simply read as zero.  Specifically:
 ///
 ///   * BASIC populates: `version`, `bytes_in_use`,
 ///     `peak_bytes_in_use`, `bytes_mapped`, `bytes_committed`,
@@ -228,38 +216,38 @@ pub struct FullAllocStats {
     pub bytes_in_use: u64,
     /// High-water mark of `bytes_in_use`.
     pub peak_bytes_in_use: u64,
-    /// Phase 9.4 -- bytes currently mapped from the OS.
+    /// Bytes currently mapped from the OS.
     pub bytes_mapped: u64,
-    /// Phase 9.4 -- bytes currently committed (writable / RSS-eligible).
+    /// Bytes currently committed (writable / RSS-eligible).
     pub bytes_committed: u64,
-    /// Phase 9.4 -- cumulative bytes decommitted back to the OS.
+    /// Cumulative bytes decommitted back to the OS.
     pub bytes_decommitted_to_os: u64,
-    /// Phase 9.2 -- allocations satisfied entirely on the fast path.
+    /// Allocations satisfied entirely on the fast path.
     pub fast_path_allocs: u64,
-    /// Phase 9.2 -- allocations that fell through to the slow path.
+    /// Allocations that fell through to the slow path.
     pub slow_path_allocs: u64,
-    /// Phase 9.2 -- deallocations satisfied entirely on the fast path.
+    /// Deallocations satisfied entirely on the fast path.
     pub fast_path_deallocs: u64,
-    /// Phase 9.2 -- deallocations routed to a remote allocator.
+    /// Deallocations routed to a remote allocator.
     pub remote_deallocs: u64,
-    /// Phase 9.2 -- cross-thread message-queue drain count.
+    /// Cross-thread message-queue drain count.
     pub message_queue_drains: u64,
-    /// Phase 9.2 -- total cross-thread messages received.
+    /// Total cross-thread messages received.
     pub cross_thread_messages_received: u64,
-    /// Phase 9.3 -- live bytes by size class.
+    /// Live bytes by size class.
     pub total_live_bytes_by_class: [u64; ffi::SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
-    /// Phase 9.3 -- live object count by size class.
+    /// Live object count by size class.
     pub total_live_count_by_class: [u64; ffi::SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
-    /// Phase 9.3 -- cumulative allocations by size class.
+    /// Cumulative allocations by size class.
     pub cumulative_alloc_by_class: [u64; ffi::SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
-    /// Phase 9.3 -- cumulative deallocations by size class.
+    /// Cumulative deallocations by size class.
     pub cumulative_dealloc_by_class: [u64; ffi::SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
-    /// Phase 9.5 -- log2-spaced allocation-lifetime histogram.
+    /// Log2-spaced allocation-lifetime histogram.
     pub lifetime_buckets_ns: [u64; ffi::SNMALLOC_FULL_STATS_LIFETIME_BUCKETS],
     /// Forward-compat reserve pool.  As of `SNMALLOC_FULL_STATS_VERSION = 2`
-    /// (Phase 11.4) `reserved[0..16]` carries the log2-bucketed
-    /// `LargeBuddyRange` free-chunk histogram; prefer the typed
-    /// accessor [`FullAllocStats::free_chunk_histogram`] for that view.
+    /// `reserved[0..16]` carries the log2-bucketed `LargeBuddyRange`
+    /// free-chunk histogram; prefer the typed accessor
+    /// [`FullAllocStats::free_chunk_histogram`] for that view.
     /// Slots `reserved[16..]` remain zero and are reserved for future
     /// additive extensions.
     pub reserved: [u64; ffi::SNMALLOC_FULL_STATS_RESERVED_SLOTS],
@@ -267,8 +255,8 @@ pub struct FullAllocStats {
 
 #[cfg(feature = "stats-basic")]
 impl FullAllocStats {
-    /// Return the Phase 11.4 free-chunk histogram from
-    /// `reserved[0..16]` as a typed array.
+    /// Return the free-chunk histogram from `reserved[0..16]` as a
+    /// typed array.
     ///
     /// Bucket `i` is the count of currently-free chunks of size
     /// `1 << (MIN_CHUNK_BITS + i)` bytes held inside any
@@ -354,14 +342,13 @@ impl SnMalloc {
         AllocStats { current_memory_usage: current, peak_memory_usage: peak }
     }
 
-    /// Capture a full allocator-telemetry snapshot (Phase 9.1 scaffold).
+    /// Capture a full allocator-telemetry snapshot.
     ///
     /// Calls the underlying `snmalloc_get_full_stats` C ABI and copies
     /// every field across into the idiomatic Rust mirror
-    /// [`FullAllocStats`].  Only `version`, `bytes_in_use`, and
-    /// `peak_bytes_in_use` carry meaningful values at the scaffold
-    /// stage; all other fields read as zero and will be populated by
-    /// the Phase 9 wave-2 tickets (9.2 / 9.3 / 9.4 / 9.5).
+    /// [`FullAllocStats`].  Which fields carry meaningful values depends
+    /// on the stats tier; see [`FullAllocStats`] for the BASIC / FULL
+    /// breakdown.  Fields the active tier does not maintain read as zero.
     ///
     /// No allocator state is mutated -- the call is a pure read backed
     /// by atomic counters and safe to invoke from any thread.
@@ -401,7 +388,7 @@ impl SnMalloc {
     }
 
     // ------------------------------------------------------------------
-    // Phase 9.7 -- runtime tunables.
+    // Runtime tunables.
     //
     // Three process-wide knobs (Poisson sample interval, chunk decay
     // window, per-thread local-cache cap) that used to be compile-time

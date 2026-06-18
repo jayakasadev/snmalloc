@@ -1,8 +1,8 @@
-//! Phase 6.2 -- external-viewer round-trip for the pprof Profile
-//! emitted by [`HeapProfile::write_pprof`].
+//! External-viewer round-trip for the pprof Profile emitted by
+//! [`HeapProfile::write_pprof`].
 //!
-//! Phase 6.1 (PR #18) already covers structural validation: we feed
-//! the encoded bytes through a 60-line in-test decoder and check
+//! The encoder's own structural validation (in `tests/profile_pprof.rs`)
+//! feeds the encoded bytes through a 60-line in-test decoder and checks
 //! field shapes, axis names, and weight totals.  That tells us our
 //! encoder is internally consistent.  What it does *not* tell us is
 //! whether a third-party pprof consumer -- specifically the canonical
@@ -26,15 +26,13 @@
 //! `go` binary up front; if it isn't on `PATH` we print a one-line
 //! `eprintln!` ("test skipped: `go` not on PATH") and return without
 //! failing.  CI configurations that *do* want to enforce this round
-//! trip -- the long-term plan is a dedicated job in the heap-
-//! profiling milestone -- will install Go and inherit the assertion
-//! path automatically.
+//! trip will install Go and inherit the assertion path automatically.
 //!
 //! Temp file convention
 //! --------------------
 //!
-//! Per the Phase 6.2 spec, no new dev-deps.  We don't pull in
-//! `tempfile`; instead we synthesise a unique path under
+//! No new dev-deps.  We don't pull in `tempfile`; instead we
+//! synthesise a unique path under
 //! [`std::env::temp_dir`] from `SystemTime::UNIX_EPOCH` nanos plus
 //! [`std::process::id`] (to be safe against parallel test binaries
 //! tripping on the same nanosecond, vanishingly rare but cheap to
@@ -151,8 +149,8 @@ fn run_workload(min_samples: usize) -> (HeapProfile, Box<dyn FnOnce()>) {
 // =========================================================================
 
 /// Build a unique path under `std::env::temp_dir()` for our pprof
-/// output.  We avoid pulling in the `tempfile` crate per the Phase
-/// 6.2 spec.  The filename combines:
+/// output.  We avoid pulling in the `tempfile` crate.  The filename
+/// combines:
 ///
 /// - the test name (so an accidental leftover is identifiable),
 /// - `std::process::id()` (to disambiguate parallel test binaries),

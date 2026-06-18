@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dump every SNMALLOC_LIKELY(...) / SNMALLOC_UNLIKELY(...) hint site to JSON.
 
-Used as a build-time sidecar so post-hoc branch-miss analysis (see Phase 10.4,
+Used as a build-time sidecar so post-hoc branch-miss analysis (in
 snmalloc-tools) can map a (file, line) tuple recovered from
 perf record/perf script back to a semantic hint kind ("LIKELY" / "UNLIKELY").
 

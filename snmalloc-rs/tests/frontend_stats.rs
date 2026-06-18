@@ -1,5 +1,4 @@
-//! Integration test for the Phase 9.2 per-thread frontend cache stats
-//! (ClickUp 86aj0tr1e).
+//! Integration test for the per-thread frontend cache stats.
 //!
 //! Exercises the alloc / dealloc counter wiring exposed via
 //! `SnMalloc::full_stats()`:
@@ -22,15 +21,15 @@
 //! thread drains its message queue) the receive-side counters.
 //!
 //! Gated behind `#[cfg(feature = "stats")]` because `full_stats()`
-//! is itself feature-gated -- the same compile-time gate the Phase
-//! 9.1 scaffold and `full_stats.rs` test use.  The C++-side counter
-//! sites compile away to zero increments when `SNMALLOC_STATS=OFF`,
-//! so this test only meaningfully exercises wired-up counters when
-//! the feature is on.
+//! is itself feature-gated -- the same compile-time gate the
+//! `full_stats.rs` test uses.  The C++-side counter sites compile
+//! away to zero increments when `SNMALLOC_STATS=OFF`, so this test
+//! only meaningfully exercises wired-up counters when the feature is
+//! on.
 
-// Phase 11.6 -- this test exercises only FrontendStats fields,
-// which the BASIC tier maintains.  Run under `stats-basic` (or, by
-// implication, `stats-full` / legacy `stats`); skipped otherwise.
+// This test exercises only FrontendStats fields, which the BASIC tier
+// maintains.  Run under `stats-basic` (or, by implication,
+// `stats-full` / legacy `stats`); skipped otherwise.
 #![cfg(feature = "stats-basic")]
 
 use snmalloc_rs::SnMalloc;
@@ -41,7 +40,7 @@ use std::alloc::{GlobalAlloc, Layout};
 // collections used inside the tests below) feeds the same per-thread
 // snmalloc counters that `SnMalloc::full_stats()` exposes.  Without this
 // install the test binary's allocations route through the OS allocator
-// and the counters remain at zero.  See ClickUp 86aj0yehx (Phase 11.7).
+// and the counters remain at zero.
 #[global_allocator]
 static ALLOC: SnMalloc = SnMalloc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -103,17 +102,14 @@ fn fast_path_alloc_counter_grows() {
     // should reflect that all N objects were freed via the local
     // branch.
     //
-    // Phase 11.9 -- `fast_path_deallocs` is now pre-credited at
-    // slab-refill time alongside `fast_path_allocs` rather than
-    // bumped per-dealloc.  The credit therefore lands BEFORE the
-    // explicit `dealloc()` loop below -- i.e. the dealloc-side
-    // delta against `after_alloc` is zero by construction.  The
-    // load-bearing assertion is that the cumulative
-    // `fast_path_deallocs` value (relative to `before`) rises by
-    // at least N after both the allocs and the matching frees
-    // have run.  This is the same end-to-end invariant the
-    // original test exercised; only the timing of when the
-    // credit hits the counter differs.
+    // `fast_path_deallocs` is pre-credited at slab-refill time
+    // alongside `fast_path_allocs` rather than bumped per-dealloc.
+    // The credit therefore lands BEFORE the explicit `dealloc()` loop
+    // below -- i.e. the dealloc-side delta against `after_alloc` is
+    // zero by construction.  The load-bearing assertion is that the
+    // cumulative `fast_path_deallocs` value (relative to `before`)
+    // rises by at least N after both the allocs and the matching frees
+    // have run.
     for p in ptrs.drain(..) {
         unsafe { alloc.dealloc(p, layout) };
     }
@@ -123,8 +119,8 @@ fn fast_path_alloc_counter_grows() {
     assert!(
         dealloc_delta >= (N as u64) - 10,
         "fast_path_deallocs delta (={}) must rise by at least {} after {} \
-         same-thread allocs+frees (Phase 11.9 measures cumulative \
-         pre-credited dealloc count vs `before`)",
+         same-thread allocs+frees (the counter is pre-credited at refill, \
+         so it is measured cumulatively vs `before`)",
         dealloc_delta,
         (N as u64) - 10,
         N

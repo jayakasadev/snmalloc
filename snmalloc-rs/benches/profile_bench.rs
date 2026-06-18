@@ -1,4 +1,4 @@
-//! Phase 7.2 -- profiling-overhead benchmark suite.
+//! Profiling-overhead benchmark suite.
 //!
 //! Goal of this bench: quantify the latency overhead added by the
 //! `profiling` Cargo feature on the hot allocation path.  We measure

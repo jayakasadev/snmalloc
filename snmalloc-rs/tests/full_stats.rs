@@ -1,12 +1,12 @@
-//! Integration test for the Phase 9.1 `FullAllocStats` scaffold.
+//! Integration test for the `FullAllocStats` interface.
 //!
 //! The Rust-side `SnMalloc::full_stats()` getter delegates to the C
 //! ABI `snmalloc_get_full_stats` (declared in
 //! `src/snmalloc/global/stats_export.h` and implemented in
-//! `src/snmalloc/override/stats_export.cc`).  At the scaffold stage
-//! only `version`, `bytes_in_use`, and `peak_bytes_in_use` carry
-//! meaningful values; every other field is zero and will be populated
-//! by the Phase 9 wave-2 tickets.
+//! `src/snmalloc/override/stats_export.cc`).  `version`,
+//! `bytes_in_use`, and `peak_bytes_in_use` always carry meaningful
+//! values; the remaining fields are populated as their backing
+//! counters are wired up.
 //!
 //! This test exists in its own integration-test binary (separate from
 //! `memory_stats.rs`) for the same reason that test does: the
@@ -18,11 +18,11 @@
 //! itself feature-gated -- without the `stats` feature the symbol does
 //! not exist (intentional compile-time gate, not a runtime-zero stub).
 
-// Phase 11.6 -- the scaffold fields (version + bytes_in_use +
-// peak_bytes_in_use) plus the wired backend counters are all
-// covered by the BASIC tier; this test is therefore gated on
-// `stats-basic` (which the legacy `stats` and `stats-full`
-// features both transitively enable in Cargo).
+// The scaffold fields (version + bytes_in_use + peak_bytes_in_use)
+// plus the wired backend counters are all covered by the BASIC tier;
+// this test is therefore gated on `stats-basic` (which the legacy
+// `stats` and `stats-full` features both transitively enable in
+// Cargo).
 #![cfg(feature = "stats-basic")]
 
 use snmalloc_rs::{FullAllocStats, SnMalloc, SNMALLOC_FULL_STATS_VERSION};
@@ -32,29 +32,28 @@ use std::alloc::{GlobalAlloc, Layout};
 // every allocation feeds the same per-thread snmalloc counters that
 // `SnMalloc::full_stats()` exposes.  Without this install the test
 // binary's allocations route through the OS allocator and the counters
-// remain at zero.  See ClickUp 86aj0yehx (Phase 11.7).
+// remain at zero.
 #[global_allocator]
 static ALLOC: SnMalloc = SnMalloc;
 
-/// Helper: confirm every field that the scaffold has *not* wired up
-/// is zero.  Keeping this check in one place makes it obvious which
-/// fields are deliberately left for wave-2 tickets to populate.
+/// Helper: confirm every field that has *not* been wired up is zero.
+/// Keeping this check in one place makes it obvious which fields are
+/// deliberately left for a later change to populate.
 ///
-/// Phase 9.2 (ticket 86aj0tr1e) wires the hot-path counters; those
-/// fields are no longer asserted-zero here.  Phase 9.3 (ticket
-/// 86aj0tr4p) wires the per-size-class histogram; the dedicated
-/// `sizeclass_histogram.rs` test exercises that.  This test focuses
-/// on the still-unimplemented wave-2 fields (9.5).
+/// The hot-path counters are now wired, so those fields are no longer
+/// asserted-zero here.  The per-size-class histogram is wired and
+/// covered by the dedicated `sizeclass_histogram.rs` test.  This test
+/// focuses on the still-unimplemented fields.
 fn assert_all_unimplemented_fields_are_zero(s: &FullAllocStats) {
-    // Phase 9.4 fields are now wired and asserted positively below in
-    // the dedicated test; they are intentionally NOT checked for zero
-    // here.
+    // The backend-fragmentation fields are now wired and asserted
+    // positively below in the dedicated test; they are intentionally
+    // NOT checked for zero here.
 
-    // Phase 9.3 fields are now wired and exercised in
+    // The per-size-class fields are now wired and exercised in
     // `sizeclass_histogram.rs`; they are intentionally NOT checked
     // for zero here.
 
-    // Phase 9.5 -- allocation-lifetime histogram.
+    // Allocation-lifetime histogram.
     assert!(
         s.lifetime_buckets_ns.iter().all(|&b| b == 0),
         "9.5: lifetime_buckets_ns not yet wired"
@@ -107,10 +106,10 @@ fn full_stats_bytes_in_use_grows_with_live_allocation() {
         during.bytes_in_use
     );
 
-    // The whole point of the scaffold: every wave-2 field must be
-    // zero today.  When a wave-2 ticket lands, the corresponding
-    // assertion here will start failing and signal that the test
-    // needs to evolve along with the new field.
+    // Every not-yet-wired field must still be zero.  When one is
+    // wired up, the corresponding assertion here will start failing
+    // and signal that the test needs to evolve along with the new
+    // field.
     assert_all_unimplemented_fields_are_zero(&during);
 
     // Release the buffer back to the allocator.
@@ -119,10 +118,9 @@ fn full_stats_bytes_in_use_grows_with_live_allocation() {
 
 #[test]
 fn full_stats_backend_frag_invariants() {
-    // Phase 9.4 -- `bytes_mapped` / `bytes_committed` /
-    // `bytes_decommitted_to_os` must satisfy the documented
-    // invariants once an allocation has driven traffic through the
-    // CommitRange.
+    // `bytes_mapped` / `bytes_committed` / `bytes_decommitted_to_os`
+    // must satisfy the documented invariants once an allocation has
+    // driven traffic through the CommitRange.
     let alloc = SnMalloc::new();
 
     // Push enough memory through the backend that we exercise the
@@ -174,9 +172,9 @@ fn full_stats_backend_frag_invariants() {
     assert_eq!(after.version, SNMALLOC_FULL_STATS_VERSION);
 }
 
-/// Phase 11.4 -- the `LargeBuddyRange` free-chunk histogram (carried
-/// in `reserved[0..16]`, exposed via `free_chunk_histogram()`) must
-/// grow under a live workload and remain non-zero after a free pushes
+/// The `LargeBuddyRange` free-chunk histogram (carried in
+/// `reserved[0..16]`, exposed via `free_chunk_histogram()`) must grow
+/// under a live workload and remain non-zero after a free pushes
 /// chunks back into the buddy free list.
 #[test]
 fn full_stats_freechunk_histogram_populates() {

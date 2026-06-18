@@ -9,10 +9,10 @@
 # `upstream/`, not the surrounding repo). snmalloc-sys/build.rs invokes it as
 # a best-effort sidecar to produce `OUT_DIR/branch_hints.json`, exported via
 # `cargo:rustc-env=SNMALLOC_BRANCH_HINTS_JSON=<path>` for downstream Rust
-# consumers (snmalloc-tools, Phase 10.4).
+# consumers (snmalloc-tools).
 """Dump every SNMALLOC_LIKELY(...) / SNMALLOC_UNLIKELY(...) hint site to JSON.
 
-Used as a build-time sidecar so post-hoc branch-miss analysis (see Phase 10.4,
+Used as a build-time sidecar so post-hoc branch-miss analysis (in
 snmalloc-tools) can map a (file, line) tuple recovered from
 perf record/perf script back to a semantic hint kind ("LIKELY" / "UNLIKELY").
 

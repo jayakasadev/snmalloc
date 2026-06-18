@@ -41,7 +41,7 @@ use_repo(rust, "rust_toolchains")
 #                  `dep:backtrace` to resolve raw frame addresses captured
 #                  by the profiler into function/file/line at dump time.
 #                  Required for the `:snmalloc_rs_profiling_symbolicated`
-#                  target (CU-86aj360ae).
+#                  target.
 #
 # The materialised repo is named `snmalloc_crates` (not the default `crates`)
 # to avoid colliding with downstream consumers' own `crate_universe` usage:

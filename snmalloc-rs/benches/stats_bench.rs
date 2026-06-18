@@ -1,14 +1,13 @@
-//! Phase 11.1 -- SNMALLOC_STATS=ON acceptance bench.
+//! SNMALLOC_STATS=ON acceptance bench.
 //!
 //! Goal of this bench: quantify the latency overhead added by the
-//! `stats` Cargo feature on the hot allocation path.  Spec target is
-//! `ratio_stats_on / ratio_stats_off <= 1.02` on the existing
-//! criterion groups (`small_allocs`, `medium_allocs`, `mixed`).
+//! `stats` Cargo feature on the hot allocation path.  Target is
+//! `ratio_stats_on / ratio_stats_off <= 1.02` on the criterion
+//! groups (`small_allocs`, `medium_allocs`, `mixed`).
 //!
 //! Unlike `profile_bench.rs` (which routes through `std::alloc` and
-//! therefore lands on the host's libc allocator -- see the
-//! "Verification follow-up" subsection in `docs/heap-profiling-
-//! benchmarks.md`), this bench installs `SnMalloc` as the
+//! therefore lands on the host's libc allocator), this bench installs
+//! `SnMalloc` as the
 //! `#[global_allocator]` so each iteration actually exercises the
 //! `sn_rust_alloc` / `sn_rust_dealloc` FFI thunks, which is where
 //! the SNMALLOC_STATS counter sites live.  Without that the bench
@@ -31,10 +30,7 @@
 //! ```
 //!
 //! The criterion baseline machinery (`--save-baseline` /
-//! `--baseline`) is the recommended way to compare the two runs;
-//! see `docs/heap-profiling-benchmarks.md` ("Phase 9 stats
-//! overhead") for the exact procedure used to produce the
-//! published 5-run mean.
+//! `--baseline`) is the recommended way to compare the two runs.
 //!
 //! Bench groups
 //! ------------
@@ -85,9 +81,9 @@ fn mixed_sizes() -> Vec<usize> {
         .collect()
 }
 
-/// Tag used in the criterion group label.  Phase 11.6 -- three-way
-/// variant: `stats-off` (no stats compiled), `stats-basic` (BASIC
-/// tier only -- cheap frontend + backend counters, target <= 2%
+/// Tag used in the criterion group label.  Three-way variant:
+/// `stats-off` (no stats compiled), `stats-basic` (BASIC tier
+/// only -- cheap frontend + backend counters, target <= 2%
 /// overhead), and `stats-full` (BASIC + per-size-class histogram +
 /// lifetime histogram, target <= 20% overhead).  A single bench
 /// binary compiles to exactly one of the three variants -- the

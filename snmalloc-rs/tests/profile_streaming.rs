@@ -1,5 +1,5 @@
 //! Integration tests for the safe Rust streaming-profiling wrapper
-//! introduced in Phase 5.2 (`snmalloc_rs::ProfilingSession`).
+//! (`snmalloc_rs::ProfilingSession`).
 //!
 //! The whole file is gated on the `profiling` Cargo feature: the
 //! types it exercises (`ProfilingSession`, `StreamSample`,
