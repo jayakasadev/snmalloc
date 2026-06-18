@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // Heap profiler -- C ABI surface for Rust consumers (and any other FFI
-// caller). Phase 4.0 of the heap-profiling milestone: declarations only,
-// no policy/wrapper logic.
+// caller).  Declarations only, no policy/wrapper logic.
 //
 // The symbols are ALWAYS exported (and ALWAYS linkable) regardless of
 // whether the C++ build was configured with SNMALLOC_PROFILE=ON.  When the
@@ -54,7 +53,7 @@ extern "C"
    * sn_rust_profile_snapshot_get.  The layout is a plain C struct so the
    * Rust side can mirror it verbatim with `#[repr(C)]`.
    *
-   * Wire-format version 2 (realloc event hook -- ticket 86aj0hk9y):
+   * Wire-format version 2 (realloc event hook):
    *   v2 appends a trailing `kind` byte (SN_RUST_PROFILE_KIND_*).  The
    *   field is non-padded relative to the v1 layout; appending it at the
    *   tail keeps the v1 prefix bit-identical.  Consumers built against
@@ -71,7 +70,7 @@ extern "C"
    *                    For a Resize event this is the post-resize allocated
    *                    size.
    *   weight           Bytes-of-request weight for this sample (Poisson
-   *                    unbiased estimator -- see profile-weight.md).  Carried
+   *                    unbiased estimator).  Carried
    *                    unchanged across a Resize -- the original sample's
    *                    Poisson weight still applies; we never re-roll the
    *                    sampler on resize.
@@ -160,7 +159,7 @@ extern "C"
   SNMALLOC_EXPORT void sn_rust_profile_snapshot_end(void* handle);
 
   // ---------------------------------------------------------------------------
-  // Streaming mode (Phase 5.1).
+  // Streaming mode.
   //
   // Snapshot mode (above) lets a caller poll the currently-live sampled
   // allocations on demand.  Streaming mode is layered on top: a registered
@@ -214,7 +213,7 @@ extern "C"
   SNMALLOC_EXPORT int sn_rust_profile_streaming_stop(void);
 
   // ---------------------------------------------------------------------------
-  // Address -> alloc-site reverse lookup (Phase 10.1B).
+  // Address -> alloc-site reverse lookup.
   //
   // Given an arbitrary heap address `addr` (typically harvested from a
   // PMU sample such as a Linux `perf` cycle event), copy the captured
@@ -263,7 +262,7 @@ extern "C"
     size_t* out_allocated_size);
 
 // ---------------------------------------------------------------------------
-// Allocation-lifetime histogram (Phase 9.5).
+// Allocation-lifetime histogram.
 //
 // log2-spaced histogram of sampled-allocation lifetimes in nanoseconds.
 // Bucket `i` covers lifetimes whose `floor(log2(lifetime_ns))` equals

@@ -143,9 +143,8 @@ criterion-integration = ["dep:criterion"]
 # LTO the rustc backend cannot see through them and every `alloc`/
 # `dealloc` becomes a real call).  Applied to both `release` and
 # `bench` so `cargo bench --features profiling` measures the same
-# code shape the release binaries will ship.  See
-# `docs/heap-profiling-benchmarks.md` ("LTO" subsection) for the
-# bench delta and the compile-time cost (~2-3x slower release link).
+# code shape the release binaries will ship.  LTO adds a compile-time
+# cost here (~2-3x slower release link).
 [profile.release]
 lto = "fat"
 codegen-units = 1
