@@ -143,9 +143,9 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
       // 64-bit hosts (the ones this allocator targets) word-sized
       // loads are atomic at the hardware level.  Either way the
       // snapshot is best-effort; alignment is to the consumer.
-      agg.accumulate(a->stats);
+      agg.accumulate(a->alloc_stats.frontend);
 #  ifdef SNMALLOC_STATS_FULL
-      sc_agg.accumulate(a->sc_stats);
+      sc_agg.accumulate(a->alloc_stats.sizeclass);
 #  endif
     }
     frontend_stats_global().snapshot_into(agg);
