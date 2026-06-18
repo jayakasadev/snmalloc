@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 9.6 -- human-readable text dump of allocator telemetry.
+// Human-readable text dump of allocator telemetry.
 //
 // This header declares the public dump API for the aggregated
-// `snmalloc_full_stats` snapshot from Phase 9.1 (and the populated
-// wave-2 fields from 9.2 / 9.3 / 9.4 / 9.5).  It is a pure formatter
-// over the existing `snmalloc_get_full_stats` C ABI; no new telemetry
-// is collected here.  Output is tcmalloc-style: a single header block
-// of MALLOC: lines, an optional per-size-class table, and an optional
+// `snmalloc_full_stats` snapshot.  It is a pure formatter over the
+// existing `snmalloc_get_full_stats` C ABI; no new telemetry is
+// collected here.  Output is tcmalloc-style: a single header block of
+// MALLOC: lines, an optional per-size-class table, and an optional
 // lifetime histogram, all separated by `------------------------------`
 // rules.
 //

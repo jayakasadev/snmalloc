@@ -1,53 +1,47 @@
 // SPDX-License-Identifier: MIT
 //
-// Heap profiler -- streaming broadcast primitive (Phase 5.1).
+// Heap profiler -- streaming broadcast primitive.
 //
 // Distinct from `sampled_list.h` (the lock-free list of currently-live
-// sampled allocations).  `AllocationSampleList` is a tiny multi-subscriber
-// notification primitive: every successful `record_alloc` fan-outs an
-// invocation to each registered handler.  Snapshot mode (Phase 4) keeps
-// holding the SampledAlloc in `SamplerGlobals::list()` for later read; the
-// streaming hook is layered on top so a process can observe every sampled
-// alloc *as it happens* in addition to (or instead of) consuming snapshots
-// later.
+// sampled allocations).  `AllocationSampleList` is a multi-subscriber
+// notification primitive: every successful `record_alloc` fans out an
+// invocation to each registered handler, so a process can observe every
+// sampled alloc as it happens in addition to (or instead of) consuming
+// snapshots from `SamplerGlobals::list()` later.
 //
-// Reference: tcmalloc's `MallocExtension::SetSampleHandler` -- a single
-// registered C function pointer that receives each sampled alloc event in
-// real time.  We support up to K=4 simultaneous subscribers (e.g. a Rust
-// listener + a C++ logging shim + headroom) without dynamic allocation.
+// Modelled on tcmalloc's `MallocExtension::SetSampleHandler` (a single
+// registered C function pointer receiving each sampled alloc event in real
+// time), but supporting up to K=4 simultaneous subscribers without dynamic
+// allocation.
 //
-// Storage choice (documented per task spec):
-//   We use a fixed-size std::atomic<Callback> slot array (K = 4).  This is
-//   strictly simpler than an intrusive linked list (no allocation, no
-//   tombstones, no ABA tagging) and matches the realistic upper bound on
-//   subscribers in a heap profiler -- nobody runs four simultaneous
-//   listeners in practice; we leave headroom over the tcmalloc-style "one
-//   global handler".  The cost is that register() may fail with
-//   `kNoFreeSlot` if all K slots are occupied; the caller surfaces that
-//   to the user as the FFI's "already registered" error code.
+// Storage: a fixed-size std::atomic<Callback> slot array (K = 4).  Simpler
+// than an intrusive linked list (no allocation, no tombstones, no ABA
+// tagging) and matches the realistic subscriber count in a heap profiler.
+// The cost is that register() may fail with `kNoFreeSlot` if all K slots
+// are occupied; the caller surfaces that as the FFI's "already registered"
+// error code.
 //
 // Concurrency contract:
-//   - register / unregister are themselves lock-free (single CAS on a
-//     slot).  They MAY race with broadcast(); broadcast tolerates a slot
-//     transitioning to null mid-fan-out by checking each load.
-//   - broadcast() loads each slot relaxed and invokes any non-null
-//     handler.  A handler registered after broadcast has started may or
-//     may not be observed -- this matches the "best-effort streaming"
-//     semantics typical of sample-handlers in heap profilers.
+//   - register / unregister are lock-free (single CAS on a slot).  They
+//     MAY race with broadcast(); broadcast tolerates a slot transitioning
+//     to null mid-fan-out by checking each load.
+//   - broadcast() loads each slot and invokes any non-null handler.  A
+//     handler registered after broadcast has started may or may not be
+//     observed -- best-effort streaming semantics.
 //   - Handler invariants (REQUIRED of the caller):
 //       * Must be marked `noexcept` (any exception escaping is UB).
 //       * Must NOT allocate via snmalloc (would re-enter the alloc path).
 //       * Must complete promptly: the handler runs on the allocating
 //         thread, inline with the alloc hot path's slow arm.
-//     The reentrancy ban is enforced *culturally* (header doc) rather than
-//     mechanically -- but the call site in `record.h` is already inside
-//     the Sampler's `ReentrancyGuard` scope, so a handler that does
-//     allocate will short-circuit on its own re-entry rather than
-//     infinite-loop.
+//     The reentrancy ban is not enforced mechanically, but the call site
+//     in `record.h` runs inside the Sampler's `ReentrancyGuard` scope, so
+//     a handler that does allocate short-circuits on re-entry rather than
+//     infinite-looping.
 //
-// This file is purely additive and contains no SNMALLOC_PROFILE gating:
-// it is safe to include from any TU.  The call site in record.h does the
-// gating, and the FFI wiring in override/rust.cc gates with SNMALLOC_PROFILE.
+// This file is purely additive and has no SNMALLOC_PROFILE gating: it is
+// safe to include from any TU.  The call site in `record.h` does the
+// gating, and the FFI wiring in `override/rust.cc` gates with
+// SNMALLOC_PROFILE.
 
 #pragma once
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Heap profiler -- log2-spaced allocation-lifetime histogram (Phase 9.5).
+// Heap profiler -- log2-spaced allocation-lifetime histogram.
 //
 // Records the lifetime (dealloc-time minus sample-time) of every sampled
 // allocation that completes its lifecycle while the profiler is active.

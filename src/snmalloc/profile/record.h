@@ -2,20 +2,18 @@
 //
 // Heap profiler -- record_alloc / record_dealloc hook entry points.
 //
-// Phase 3.1 of the heap-profiling milestone.  These free functions are the
-// allocator-side hooks that fire from the dealloc (Phase 3.1) and alloc
-// (Phase 3.3) chokepoints in corealloc.h.
+// These free functions are the allocator-side hooks that fire from the
+// alloc and dealloc chokepoints in corealloc.h.
 //
 //   record_dealloc<Config>(ptr)
-//     Called from `Allocator::dealloc(void*)` at corealloc.h:1025 (the H1
-//     waist that catches 100% of public free entry points).  If the
-//     configuration is not profile-enabled (i.e. the slab metadata does not
-//     carry a LazyArrayClientMetaDataProvider<SampledAlloc*> slot) the call
-//     compiles to a no-op.
+//     Called from `Allocator::dealloc(void*)` (the waist that catches every
+//     public free entry point).  If the configuration is not profile-enabled
+//     (i.e. the slab metadata does not carry a
+//     LazyArrayClientMetaDataProvider<SampledAlloc*> slot) the call compiles
+//     to a no-op.
 //
 //   record_alloc<Config>(...)
-//     Stubbed in Phase 3.1; full wiring of the alloc side lands in Phase
-//     3.3.  Declared here so the header surface is stable.
+//     Alloc-side counterpart, fired from the user-facing alloc chokepoint.
 //
 // Re-entrancy:
 //   - record_dealloc takes the per-thread ReentrancyGuard.  If the sampler
@@ -36,21 +34,16 @@
 #pragma once
 
 // Pull in `snmalloc_core.h` so this header is self-sufficient: any
-// translation unit (test sources, downstream Bazel targets, etc.)
-// can `#include <snmalloc/profile/record.h>` without having first
-// included `<snmalloc/snmalloc.h>` and rely on
-// `LazyArrayClientMetaDataProvider`, `address_cast`, `slab_index`,
-// etc. being visible.  Older versions of this header documented a
-// cycle of the form
-//   commonconfig.h -> mem/mem.h -> mem/corealloc.h -> profile/record.h.
-// In practice that cycle does not exist: `mem/corealloc.h` only
-// forward-references the record_* entry points by name in comments,
-// not via `#include`.  `backend_helpers.h` itself includes
-// `commonconfig.h` *before* it includes us under `#ifdef
-// SNMALLOC_PROFILE`, so the `#pragma once` here makes any
-// re-entry a cheap no-op.  Adding the include here means the
-// pre-clang-format manual ordering (snmalloc.h before record.h) is
-// no longer load-bearing -- ticket 86aj2dwjz / cleanup PR.
+// translation unit (test sources, downstream targets, etc.) can
+// `#include <snmalloc/profile/record.h>` without having first included
+// `<snmalloc/snmalloc.h>` and rely on `LazyArrayClientMetaDataProvider`,
+// `address_cast`, `slab_index`, etc. being visible.  There is no include
+// cycle: `mem/corealloc.h` only forward-references the record_* entry
+// points by name in comments, not via `#include`.  `backend_helpers.h`
+// includes `commonconfig.h` before it includes us under `#ifdef
+// SNMALLOC_PROFILE`, so the `#pragma once` here makes any re-entry a cheap
+// no-op.  Adding the include means the include ordering (snmalloc.h before
+// record.h) is no longer load-bearing.
 #include "../ds_core/defines.h"
 #include "../snmalloc_core.h"
 #include "allocation_sample_list.h"
@@ -77,15 +70,14 @@ namespace snmalloc::profile
   using ProfileSlot = std::atomic<SampledAlloc*>;
 
   /**
-   * Wall-clock-style monotonic nanosecond reading used to stamp
-   * sampled-allocation lifetimes (Phase 9.5).
+   * Monotonic nanosecond reading used to stamp sampled-allocation
+   * lifetimes.
    *
    * Steady clock so an NTP step on the wall-clock cannot synthesise
    * negative lifetimes; nanosecond resolution because the resulting
    * value feeds a log2-binned histogram (`LifetimeHistogram`) where
-   * sub-microsecond fidelity matters.  The reading itself is the same
-   * one std::chrono uses internally -- a leaf function with no
-   * allocator re-entry.
+   * sub-microsecond fidelity matters.  Leaf function with no allocator
+   * re-entry.
    */
   SNMALLOC_FAST_PATH_INLINE uint64_t lifetime_now_ns() noexcept
   {
@@ -157,9 +149,9 @@ namespace snmalloc::profile
   }
 
   /**
-   * Dealloc-fast-path peek (bundle tweak 3, ticket 86aj0jfwh).
+   * Dealloc-fast-path peek.
    *
-   * Inlined at the H1 call site in `Allocator::dealloc` so the
+   * Inlined at the call site in `Allocator::dealloc` so the
    * overwhelmingly common "this object was never sampled" case stays a
    * load + branch with NO function call frame.  Returns true iff the
    * caller has nothing to do (slot null, backing not installed, or
@@ -190,29 +182,26 @@ namespace snmalloc::profile
     }
     else
     {
-      // Bundle tweak F (86aj0kdym): `free(nullptr)` is rare; the common
-      // case is a non-null `p` so the branch predictor should fall through
-      // to the slot probe.  Previously hinted LIKELY by mistake.
+      // `free(nullptr)` is rare; the common case is a non-null `p` so the
+      // branch predictor should fall through to the slot probe.
       if (SNMALLOC_UNLIKELY(p == nullptr))
         return true;
 
       ProfileSlot* slot = find_profile_slot<Config>(p);
-      // Bundle tweak F: ~99.999% of frees hit a slab with no profile
-      // backing installed (or the slot lookup short-circuits via the
-      // pagemap not-owned / backend-owned branches), so the slot pointer
-      // is null on the common path.  Keep the LIKELY hint explicit so
-      // the compiler lays out the fast return inline at the call site.
+      // Almost all frees hit a slab with no profile backing installed (or
+      // the slot lookup short-circuits via the pagemap not-owned /
+      // backend-owned branches), so the slot pointer is null on the common
+      // path.  Keep the LIKELY hint explicit so the compiler lays out the
+      // fast return inline at the call site.
       if (SNMALLOC_LIKELY(slot == nullptr))
         return true;
 
       // Relaxed load matches the peek already done inside the full
       // `record_dealloc`; either we skip cleanly here or the full hook
-      // re-checks under the re-entrancy guard with a CAS.
-      //
-      // Bundle tweak F: the slot exists (backing array installed for the
-      // slab) but this specific object is almost always not the one
-      // sampled, so the atomic load returns null on the overwhelming
-      // majority of frees against the slab.
+      // re-checks under the re-entrancy guard with a CAS.  The slot exists
+      // (backing array installed for the slab) but this specific object is
+      // almost always not the one sampled, so the load returns null on the
+      // overwhelming majority of frees against the slab.
       if (SNMALLOC_LIKELY(slot->load(std::memory_order_relaxed) == nullptr))
         return true;
 
@@ -258,7 +247,7 @@ namespace snmalloc::profile
       return nullptr;
     }
 
-    // Phase 9.5 -- lifetime histogram bump.
+    // Lifetime histogram bump.
     //
     // The successful CAS above is the linearisation point for this
     // sample's death: at most one thread reaches this branch per
@@ -267,8 +256,7 @@ namespace snmalloc::profile
     // lifetime in nanoseconds and update the log2-binned histogram.
     //
     // `alloc_ts_ns == 0` means the sample lacks a recorded timestamp
-    // (e.g. a node that was published before the 9.5 stamp landed, or
-    // a test harness path that bypassed `record_alloc`).  Skipping
+    // (e.g. a test harness path that bypassed `record_alloc`).  Skipping
     // those keeps the histogram free of spuriously-huge buckets that
     // would otherwise come from `now - 0`.
     const uint64_t alloc_ts = expected->alloc_ts_ns;
@@ -291,7 +279,7 @@ namespace snmalloc::profile
   }
 
   /**
-   * record_dealloc -- H1 hook body.
+   * record_dealloc -- dealloc hook body.
    *
    * Called from `Allocator::dealloc(void*)` for every public free entry
    * point.  Walks the lazy profile slot for `p`; if the slot is non-null,
@@ -332,11 +320,11 @@ namespace snmalloc::profile
       // not yet installed for this slab -- common case until something
       // on this slab has been sampled.  This is the cheapest filter
       // (pure load, no TLS writes) so we run it before any re-entrancy
-      // bookkeeping.  Performance note: the alternative ordering
-      // (re-entrancy check first) was measured to add an extra TLS
-      // load + write to the common-case dealloc path even when no slot
-      // is installed; the slab-metadata probe here is touched anyway
-      // for non-profile dealloc work, so it is effectively free.
+      // bookkeeping: the alternative ordering (re-entrancy check first)
+      // adds a TLS load + write to the common-case dealloc path even when
+      // no slot is installed, whereas the slab-metadata probe here is
+      // touched anyway for non-profile dealloc work, so it is effectively
+      // free.
       ProfileSlot* slot = find_profile_slot<Config>(p);
       if (SNMALLOC_LIKELY(slot == nullptr))
         return;
@@ -429,7 +417,7 @@ namespace snmalloc::profile
   }
 
   /**
-   * record_alloc -- A1 hook body.
+   * record_alloc -- alloc hook body.
    *
    * Called from the user-facing `snmalloc::alloc(size_t)` chokepoint in
    * global/globalalloc.h (and its `alloc_aligned` sibling) for every
@@ -481,12 +469,11 @@ namespace snmalloc::profile
       if (SNMALLOC_UNLIKELY(p == nullptr))
         return;
 
-      // Bundle tweak 2 (86aj0jfwh): the fast path operates on the
-      // namespace-scope `bytes_until_sample` TLS via `tl_record_alloc`,
-      // which inlines to a single TLS subtract + signed compare with
-      // no Sampler-typed TLS lookup on the common branch.  The slow
-      // path indirects through the per-thread `tl_sampler` and runs
-      // the existing bootstrap / weight / publish machinery.
+      // The fast path operates on the namespace-scope `bytes_until_sample`
+      // TLS via `tl_record_alloc`, which inlines to a single TLS subtract +
+      // signed compare with no Sampler-typed TLS lookup on the common
+      // branch.  The slow path indirects through the per-thread
+      // `tl_sampler` and runs the bootstrap / weight / publish machinery.
       //
       // The sampler slow path has its own internal re-entrancy short-
       // circuit, so we do not need an outer guard here.  It builds a
@@ -505,16 +492,12 @@ namespace snmalloc::profile
         return;
       }
 
-      // Phase 9.5 -- stamp the wall-clock-style monotonic nanosecond
-      // timestamp on the SampledAlloc *now*, before it becomes
-      // reachable from the dealloc hook.  We do this here (in
-      // `record.h`) rather than inside the sampler slow path so that
-      // ticket 9.7 (sampler.h runtime config) and 9.5 don't collide on
-      // the same file.  Relaxed store: the dealloc-side reader runs on
-      // the same allocation's free path, which already synchronises
-      // with this thread via the per-object slot CAS (`release` /
-      // `acquire`) installed a few lines below -- the timestamp's
-      // visibility piggybacks on that release.
+      // Stamp the monotonic nanosecond timestamp on the SampledAlloc *now*,
+      // before it becomes reachable from the dealloc hook.  Relaxed store:
+      // the dealloc-side reader runs on the same allocation's free path,
+      // which already synchronises with this thread via the per-object slot
+      // CAS (`release` / `acquire`) installed a few lines below -- the
+      // timestamp's visibility piggybacks on that release.
       node->alloc_ts_ns = lifetime_now_ns();
 
       // Locate (and lazily materialise) the per-object profile slot.
@@ -552,7 +535,7 @@ namespace snmalloc::profile
         return;
       }
 
-      // Streaming-mode fan-out (Phase 5.1).
+      // Streaming-mode fan-out.
       //
       // Now that the SampledAlloc is fully published (payload populated by
       // the Sampler slow path, list-link visible to readers, per-object
@@ -578,7 +561,7 @@ namespace snmalloc::profile
   }
 
   /**
-   * record_realloc -- in-place resize hook (ticket 86aj0hk9y).
+   * record_realloc -- in-place resize hook.
    *
    * Called from the in-place realloc fast path in `snmalloc::libc::realloc`
    * (src/snmalloc/global/libc.h) when the new size stays within the same
@@ -599,8 +582,8 @@ namespace snmalloc::profile
    *     slot's `requested_size` and `allocated_size` in place (atomic
    *     relaxed stores -- the fields are scalar; readers tolerate stale
    *     values, and there is no inter-field consistency invariant to
-   *     preserve).  This is option C from the ticket: snapshots see the
-   *     *latest* size, not the original size.
+   *     preserve).  Snapshots see the *latest* size, not the original
+   *     size.
    *   - We then broadcast a Resize event to streaming consumers.  The
    *     broadcast carries a stack-local copy of the SampledAlloc with
    *     `kind = Resize`; the persisted slot's `kind` stays at `Alloc`
