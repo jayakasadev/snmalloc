@@ -1,4 +1,4 @@
-//! Phase 6.1 -- pprof protobuf encoder for [`HeapProfile`].
+//! pprof protobuf encoder for [`HeapProfile`].
 //!
 //! Emits the subset of Google's pprof
 //! [`Profile`](https://github.com/google/pprof/blob/main/proto/profile.proto)

@@ -1,4 +1,4 @@
-//! Phase 4.3 integration tests for snmalloc heap profiling.
+//! Integration tests for snmalloc heap profiling.
 //!
 //! Two halves:
 //!
@@ -25,8 +25,8 @@
 //! green without re-running the build with feature flags.
 //!
 //! Known caveat: the multi-threaded sampler has a documented O(1/N)
-//! per-thread teardown straggler (see Phase 3.4 / `record.h`); the
-//! 6-sigma window absorbs it for the workload sizes we use here.
+//! per-thread teardown straggler (see `record.h`); the 6-sigma window
+//! absorbs it for the workload sizes we use here.
 
 use snmalloc_rs::{SnMalloc, Weight};
 use std::alloc::{GlobalAlloc, Layout};
@@ -78,10 +78,10 @@ const SIZE: usize = 64;
 /// total variance lambda * R^2 = N*SIZE*R).  For the constants here:
 ///   sigma_bytes  = sqrt(6_400_000 * 4096) ~= 161_951
 ///   relative 1-sigma ~= 2.53% of expected, so a hard 5% bound is only
-///   ~1.97 sigma -- that's a one-in-twenty flake under CPU contention,
-///   which is exactly the failure mode tracked by 86aj0h83a.  Asserting
-///   against the derived 6-sigma envelope ([5_428_293, 7_371_707]) is
-///   both more rigorous and dramatically less flaky.
+///   ~1.97 sigma -- that's a one-in-twenty flake under CPU contention.
+///   Asserting against the derived 6-sigma envelope
+///   ([5_428_293, 7_371_707]) is both more rigorous and dramatically
+///   less flaky.
 ///
 /// On the feature-off build this test is a no-op.
 #[test]
@@ -146,7 +146,7 @@ fn accuracy_single_threaded() {
     // above for the derivation).  This is the statistically honest
     // bound for the chosen (N, SIZE, RATE); a hard percentage cap like
     // 5% works out to only ~1.97 sigma at these constants and flakes
-    // under sibling cargo-test CPU contention (ticket 86aj0h83a).
+    // under sibling cargo-test CPU contention.
     let expected_bytes_f = (N_PER_THREAD * SIZE) as f64;
     let sigma_bytes = (expected_bytes_f * RATE as f64).sqrt();
     let lo_bytes_f = expected_bytes_f - 6.0 * sigma_bytes;
@@ -178,12 +178,12 @@ fn accuracy_single_threaded() {
 ///   - sigma        = sqrt(1250) = ~35.4
 ///   - 6-sigma window = [1037, 1462]
 ///
-/// Per Phase 3.4 there is a known O(1/N) per-thread teardown
-/// straggler in the dealloc hook -- a sample produced very late by
-/// thread T can still be in flight when T exits and the global list
-/// briefly forgets about it.  At N = 80 000 this is well under one
-/// sample on average and is absorbed by the 6-sigma window, but we
-/// document the source explicitly so the failure mode is recognisable.
+/// There is a known O(1/N) per-thread teardown straggler in the
+/// dealloc hook -- a sample produced very late by thread T can still
+/// be in flight when T exits and the global list briefly forgets about
+/// it.  At N = 80 000 this is well under one sample on average and is
+/// absorbed by the 6-sigma window, but we document the source
+/// explicitly so the failure mode is recognisable.
 ///
 /// On the feature-off build this test is a no-op.
 #[test]

@@ -3,11 +3,11 @@
 Command-line tools that join external PMU output (Linux `perf`) with
 snmalloc's in-tree allocation-site lookup and branch-hint inventory.
 
-This crate is the Phase 10.4 automation surface for the workflow
-documented in [`docs/profiling-pmu.md`](../docs/profiling-pmu.md). The
-underlying primitives — `SnMalloc::lookup_alloc_site`,
-`HeapProfile::top_sites`, and the `branch_hints.json` sidecar — landed
-in Phases 10.1 and 10.2. This crate wraps them in a clap-derive CLI.
+This crate automates the workflow documented in
+[`docs/profiling-pmu.md`](../docs/profiling-pmu.md). The underlying
+primitives — `SnMalloc::lookup_alloc_site`, `HeapProfile::top_sites`,
+and the `branch_hints.json` sidecar — are wrapped here in a
+clap-derive CLI.
 
 ## Subcommands
 
@@ -24,8 +24,8 @@ snmalloc-tools pmu-join c2c --perf-c2c <file> [--top N] [--json]
     and emit the owning allocation site per line.
 
 snmalloc-tools branch-misses --perf-script <file> --hints <branch_hints.json> [--top N] [--json]
-    Parse `perf script` output and cross-reference with the Phase
-    10.2 branch-hint inventory.  High-miss-rate inverted hints are
+    Parse `perf script` output and cross-reference with the
+    branch-hint inventory.  High-miss-rate inverted hints are
     candidates for `LIKELY` <-> `UNLIKELY` swap.
 
 snmalloc-tools rate-report --input <streaming-log.jsonl> [--top N] [--pretty]
@@ -80,9 +80,9 @@ treatment of the tradeoff.
 
 ## Live-process limitation (important)
 
-`SnMalloc::lookup_alloc_site` (Phase 10.1) only resolves addresses
-that were sampled in the **current** process — it queries the
-per-process in-memory `SampledList`, not a serialised snapshot. This
+`SnMalloc::lookup_alloc_site` only resolves addresses that were
+sampled in the **current** process — it queries the per-process
+in-memory `SampledList`, not a serialised snapshot. This
 means the `pmu-join cache-misses` and `pmu-join c2c` subcommands are
 only useful in two scenarios:
 
@@ -125,8 +125,8 @@ parser/joiner against these fixtures.
 
 ## Cross-references
 
-- Phase 10.1 — `src/snmalloc/profile/addr_lookup.h` and
+- Allocation-site lookup — `src/snmalloc/profile/addr_lookup.h` and
   `snmalloc-rs/src/profile.rs::SnMalloc::lookup_alloc_site`
-- Phase 10.2 — `scripts/dump_branch_hints.py` and the
+- Branch-hint inventory — `scripts/dump_branch_hints.py` and the
   `branch_hints_inventory` CMake target
-- Phase 10.3 — `docs/profiling-pmu.md`
+- PMU profiling workflow — `docs/profiling-pmu.md`

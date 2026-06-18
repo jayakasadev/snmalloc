@@ -35,9 +35,9 @@ ratio_idle = mean(profile-on-inactive) / mean(profile-off)
 That is the latency cost paid by a binary that compiles in the
 profiling support but never enables sampling -- i.e. the cost an end
 user sees when they build with `--features profiling` "just in case"
-and leave it dormant.  Phase 7.1 cache-line-aligned the sample
-countdown specifically to push this number below 5%, so a regression
-above ~1.05 in any of the three groups is worth investigating.
+and leave it dormant.  The sample countdown is cache-line-aligned
+specifically to push this number below 5%, so a regression above
+~1.05 in any of the three groups is worth investigating.
 
 The `profile-on-active` numbers, by contrast, measure the cost of
 actually taking the slow path.  They are larger and that's expected;

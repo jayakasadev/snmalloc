@@ -1,5 +1,5 @@
 //! Glue between the parsers and snmalloc's in-tree
-//! [`SnMalloc::lookup_alloc_site`] (Phase 10.1).
+//! [`SnMalloc::lookup_alloc_site`].
 //!
 //! The joiner walks a vector of parsed [`PerfSample`]s, tries to map
 //! each sample's data address back to the allocation that owns it,

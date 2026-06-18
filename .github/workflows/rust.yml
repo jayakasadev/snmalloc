@@ -69,7 +69,7 @@ jobs:
       run: cargo test ${{ matrix.release.flag }} --all ${{ matrix.features.args }}
 
   # ============================================================================
-  # Heap-profiling feature build (Phase 7.5)
+  # Heap-profiling feature build
   #
   # Exercises the `profiling` cargo feature (which propagates
   # SNMALLOC_PROFILE=ON to the C++ build via snmalloc-sys) on every push.

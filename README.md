@@ -151,8 +151,8 @@ Two viewer formats are supported out of the box from the Rust crate:
 
 At the default 512 KiB sampling rate, the profiler adds **<1% throughput
 overhead** on the criterion micro-benchmark suite shipped in
-[`snmalloc-rs/benches/profile_bench.rs`](snmalloc-rs/benches/profile_bench.rs)
-(Phase 7 of the heap-profiling design). The bench measures three
+[`snmalloc-rs/benches/profile_bench.rs`](snmalloc-rs/benches/profile_bench.rs).
+The bench measures three
 configurations — `profile-off`, `profile-on-inactive`, and
 `profile-on-active` — and verifies that even the *active* configuration
 stays within the 1% budget on the standard sizes. Builds with

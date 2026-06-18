@@ -1,5 +1,4 @@
-//! Integration test for the Phase 9.3 per-size-class histogram
-//! (ClickUp 86aj0tr4p).
+//! Integration test for the per-size-class histogram.
 //!
 //! Exercises the four per-class arrays in `FullAllocStats`:
 //!
@@ -28,12 +27,12 @@
 //! counters compile away to no-ops on the C++ side, and the symbol
 //! does not exist on the Rust side.
 
-// Phase 11.6 -- the per-size-class histogram is FULL-tier only.
-// Under `stats-basic` the `*_by_class[]` arrays are all-zero by
-// design (the BASIC tier deliberately skips the per-class hot-path
-// stores to stay inside the <= 2% overhead budget), so this test
-// would not have meaningful deltas to assert against.  Gated to
-// `stats-full` accordingly.
+// The per-size-class histogram is FULL-tier only.  Under
+// `stats-basic` the `*_by_class[]` arrays are all-zero by design (the
+// BASIC tier deliberately skips the per-class hot-path stores to stay
+// inside the <= 2% overhead budget), so this test would not have
+// meaningful deltas to assert against.  Gated to `stats-full`
+// accordingly.
 #![cfg(feature = "stats-full")]
 
 use snmalloc_rs::SnMalloc;
@@ -43,7 +42,7 @@ use std::alloc::{GlobalAlloc, Layout};
 // every allocation feeds the per-class histogram counters that
 // `SnMalloc::full_stats()` exposes.  Without this install the test
 // binary's allocations route through the OS allocator and the counters
-// remain at zero.  See ClickUp 86aj0yehx (Phase 11.7).
+// remain at zero.
 #[global_allocator]
 static ALLOC: SnMalloc = SnMalloc;
 

@@ -17,11 +17,10 @@ include = [
     "upstream/CMakeLists.txt",
     "upstream/src/**",
     "upstream/fuzzing/**",
-    # Phase 11.2: vendor scripts/dump_branch_hints.py so the published
-    # snmalloc-sys tarball can regenerate the branch-hints JSON sidecar
-    # consumed by snmalloc-tools (Phase 10.4). Without this entry the
-    # script lives only at the upstream repo root and is stripped from the
-    # crate package.
+    # Vendor scripts/dump_branch_hints.py so the published snmalloc-sys
+    # tarball can regenerate the branch-hints JSON sidecar consumed by
+    # snmalloc-tools. Without this entry the script lives only at the
+    # upstream repo root and is stripped from the crate package.
     "upstream/scripts/**",
     # Vendor the upstream cmake/ directory so the bundled
     # snmalloc CMakeLists.txt can `include(...)` its sidecar
@@ -54,7 +53,7 @@ usecxx17 = []
 check = []
 lto = []
 notls = []
-## Phase 11.6 (ticket 86aj0ydjv) -- tiered allocator stats.
+## Tiered allocator stats.
 #
 # Three knobs exposed via Cargo features map to the corresponding
 # CMake options (see snmalloc-sys/build.rs):
@@ -92,7 +91,7 @@ profiling = []
 # must be present here as well as in `snmalloc-rs/Cargo.toml` for
 # rustc's cross-crate LTO pass to actually inline through the
 # `extern "C"` FFI surface.  See `docs/heap-profiling-benchmarks.md`
-# ("LTO" subsection) for the bench delta.  Ticket: ClickUp 86aj0jfz1.
+# ("LTO" subsection) for the bench delta.
 [profile.release]
 lto = "fat"
 codegen-units = 1

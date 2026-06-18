@@ -1,4 +1,4 @@
-//! Runtime configuration for the snmalloc heap profiler (Phase 4.5).
+//! Runtime configuration for the snmalloc heap profiler.
 //!
 //! The wrappers in [`crate::profile`] expose the raw FFI surface
 //! (`set_sampling_rate` / `sampling_rate` / `snapshot`), but they require

@@ -1,10 +1,10 @@
-//! Phase 4.6 -- viewer round-trip tests for the folded-stack output
-//! emitted by [`HeapProfile::write_flamegraph`].
+//! Viewer round-trip tests for the folded-stack output emitted by
+//! [`HeapProfile::write_flamegraph`].
 //!
-//! This is a **test-only** phase: no new public API on
-//! [`HeapProfile`] / [`SnMalloc`] is added, and the wrapper in
-//! `src/profile.rs` is not touched.  The point is to assert that the
-//! output we ship is consumable by two real viewers in the ecosystem:
+//! These are test-only: no new public API on [`HeapProfile`] /
+//! [`SnMalloc`] is added, and the wrapper in `src/profile.rs` is not
+//! touched.  The point is to assert that the output we ship is
+//! consumable by two real viewers in the ecosystem:
 //!
 //! 1.  [`inferno`](https://github.com/jonhoo/inferno) -- the pure-Rust
 //!     port of Brendan Gregg's `flamegraph.pl`.  We can drive it in
@@ -24,9 +24,9 @@
 //!
 //! 3.  `round_trip_weight_invariance` -- the sum of weights in the
 //!     folded output must equal [`HeapProfile::total_allocated_bytes`].
-//!     This is a regression guard for the Phase 4.3 BTreeMap collapse
-//!     step: if collapsing ever started dropping or double-counting a
-//!     stack, the totals would silently disagree.
+//!     This is a regression guard for the BTreeMap collapse step: if
+//!     collapsing ever started dropping or double-counting a stack,
+//!     the totals would silently disagree.
 //! 4.  `empty_snapshot_viewer_safety` -- on an empty profile,
 //!     `write_flamegraph` writes nothing, and feeding that empty
 //!     stream to `inferno` must surface a clean `Err` rather than a
@@ -59,18 +59,16 @@ mod workload {
     /// these tests don't compete heavily for CPU with
     /// `profile_accuracy.rs` running in a sibling test binary (`cargo
     /// test --all` parallelises binaries by default).  CPU contention
-    /// matters because Phase 4.3's `accuracy_single_threaded` has a
-    /// tight 5%-of-(N*SIZE) tolerance on `sum(weight)` that is already
-    /// pre-existing flaky under heavy parallel load; we keep our
-    /// footprint modest to minimise that interaction.  At
-    /// lambda = 5000 * 64 / 512 = 625 expected samples the >=50-sample
-    /// precondition has many sigma of margin.
+    /// matters because `accuracy_single_threaded` has a tight
+    /// 5%-of-(N*SIZE) tolerance on `sum(weight)` that is flaky under
+    /// heavy parallel load; we keep our footprint modest to minimise
+    /// that interaction.  At lambda = 5000 * 64 / 512 = 625 expected
+    /// samples the >=50-sample precondition has many sigma of margin.
     pub const RATE: usize = 512;
     /// Allocations per workload.  At `RATE = 512` this produces ~625
-    /// samples on average -- well above the 50-sample floor Phase 4.6
-    /// requires for the inferno round-trip while staying small enough
-    /// that the total work for this test binary is a fraction of a
-    /// second.
+    /// samples on average -- well above the 50-sample floor the inferno
+    /// round-trip requires, while staying small enough that the total
+    /// work for this test binary is a fraction of a second.
     pub const N_ALLOCS: usize = 5_000;
     /// Per-allocation size.  Small enough to land in a dense sizeclass.
     pub const SIZE: usize = 64;
@@ -98,7 +96,7 @@ mod workload {
     /// wired in or the sampler is mis-calibrated -- in either case the
     /// rest of the test would produce a misleading green.
     ///
-    /// `min_samples` should be at least 50 per the Phase 4.6 spec.
+    /// `min_samples` should be at least 50.
     pub fn run_workload(
         min_samples: usize,
     ) -> (snmalloc_rs::HeapProfile, Box<dyn FnOnce()>) {
@@ -223,8 +221,8 @@ fn inferno_roundtrip() {
 /// (an `[unknown]` bar) which would print as ` <weight>` -- with a
 /// leading space, no leading non-whitespace token, and therefore
 /// failing the speedscope regex.  In practice empty stacks are very
-/// rare on a Phase 3 build (the stack-walker reliably returns at
-/// least the call site) but the contract is conservative.
+/// rare (the stack-walker reliably returns at least the call site)
+/// but the contract is conservative.
 ///
 /// [1]: https://github.com/jlfwong/speedscope/wiki/Importing-from-custom-sources
 #[cfg(feature = "profiling")]
@@ -306,14 +304,14 @@ fn speedscope_folded_import() {
     cleanup();
 }
 
-/// Regression guard for the Phase 4.3 BTreeMap collapse step.  If
-/// collapsing ever started dropping or double-counting a stack, the
-/// folded weight sum would silently disagree with
-/// [`HeapProfile::total_allocated_bytes`].  Phase 4.3 already covers
-/// this on synthetic samples (`flamegraph_weight_sum_matches_total_allocated`
-/// in `src/profile.rs`); we re-assert it here over a real-workload
-/// snapshot, both because the unit test only sees two samples and
-/// because Phase 4.6's whole point is to harden the
+/// Regression guard for the BTreeMap collapse step.  If collapsing
+/// ever started dropping or double-counting a stack, the folded
+/// weight sum would silently disagree with
+/// [`HeapProfile::total_allocated_bytes`].  The unit test
+/// `flamegraph_weight_sum_matches_total_allocated` in `src/profile.rs`
+/// already covers this on synthetic samples; we re-assert it here over
+/// a real-workload snapshot, both because the unit test only sees two
+/// samples and because the point of these tests is to harden the
 /// production-shape output.
 #[cfg(feature = "profiling")]
 #[test]

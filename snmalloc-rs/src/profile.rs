@@ -1,7 +1,6 @@
-//! Safe Rust wrapper over the `sn_rust_profile_*` FFI surface added in
-//! Phase 4.0.  This module is only compiled when the `profiling` Cargo
-//! feature is enabled; the wrapper is itself purely a thin, owned data
-//! type plus an RAII guard around the FFI snapshot handle.
+//! Safe Rust wrapper over the `sn_rust_profile_*` FFI surface.  The
+//! wrapper is purely a thin, owned data type plus an RAII guard around
+//! the FFI snapshot handle.
 //!
 //! Memory model
 //! ------------
@@ -106,9 +105,9 @@ pub struct BtSample {
     pub allocated_size: usize,
     /// Bytes-of-request weight for this Poisson sample.
     pub weight: usize,
-    /// Captured return addresses, innermost first.  Symbolicating
-    /// these into function names + line numbers is Phase 4.5; for
-    /// now they are opaque code pointers.
+    /// Captured return addresses, innermost first.  Opaque code
+    /// pointers; symbolicate them into function names + line numbers
+    /// via [`HeapProfile::symbolize`] (with the `symbolicate` feature).
     pub stack: Vec<*const u8>,
 }
 
@@ -117,9 +116,9 @@ impl BtSample {
     /// [`crate::streaming::StreamSample::kind`] API.  Snapshot mode
     /// always returns [`SampleKind::Alloc`]: the persisted SampledList
     /// slot never carries a `Resize` tag -- only the streaming
-    /// broadcast does (ticket 86aj0hk9y).  Exposing the accessor here
-    /// regardless lets snapshot- and streaming-mode consumers share
-    /// the same `kind()` shape.
+    /// broadcast does.  Exposing the accessor here regardless lets
+    /// snapshot- and streaming-mode consumers share the same `kind()`
+    /// shape.
     #[inline]
     pub fn kind(&self) -> SampleKind {
         SampleKind::Alloc
@@ -241,8 +240,7 @@ unsafe impl Sync for Frames {}
 ///   view, which is what most user-level heap-attribution dashboards
 ///   want.
 ///
-/// See `docs/profile-weight.md` and Phase 4.3 of the heap-profiling
-/// design for the rationale; in particular the default tracks the
+/// The default ([`Weight::Allocated`]) tracks the
 /// `total_allocated_bytes` aggregator on [`HeapProfile`].
 ///
 /// # Example
@@ -415,7 +413,7 @@ impl HeapProfile {
         self.samples.len()
     }
 
-    /// Log2-spaced allocation-lifetime histogram (Phase 9.5).
+    /// Log2-spaced allocation-lifetime histogram.
     ///
     /// Returns a snapshot of the process-wide histogram of sampled
     /// allocation lifetimes, in nanoseconds.  Bucket `i` covers
@@ -729,9 +727,9 @@ impl HeapProfile {
     ///   bytes) across every snapshot sample whose stack is identical.
     ///
     /// The weight projection is [`Weight::Allocated`] -- bytes the
-    /// allocator actually returned -- which matches the default UI
-    /// view in `profile-weight.md`.  For [`Weight::Requested`] or
-    /// other projections call [`HeapProfile::write_flamegraph_with`].
+    /// allocator actually returned -- which is the default UI view.
+    /// For [`Weight::Requested`] or other projections call
+    /// [`HeapProfile::write_flamegraph_with`].
     ///
     /// # Frame rendering
     ///
@@ -772,10 +770,7 @@ impl HeapProfile {
     /// for diffing two profiles in version control.
     ///
     /// Speedscope's native JSON schema is **not** emitted by this
-    /// method; speedscope can import the folded format directly.  A
-    /// dedicated `to_speedscope` is deferred to Phase 4.5+, where it
-    /// can layer on top of the symbolicator and emit
-    /// `frames`/`shared`/`profiles` records with real symbol names.
+    /// method; speedscope can import the folded format directly.
     ///
     /// # Example
     ///
@@ -872,7 +867,7 @@ impl HeapProfile {
     }
 
     /// Write the profile in Google's [`pprof`][pprof] Profile
-    /// protobuf format (Phase 6.1).
+    /// protobuf format.
     ///
     /// Output is a raw (uncompressed) protobuf byte stream consumable
     /// by `go tool pprof`, [Pyroscope](https://pyroscope.io/),
@@ -1298,19 +1293,18 @@ fn resolve_one(addr: *const u8) -> ResolvedFrame {
 ///
 /// The `backtrace` crate parses the host binary's debug info on every
 /// `resolve` call -- on macOS this is a ~17 MB transient Vec inside
-/// `gimli::macho::Object::parse` and a ~20 ms self-CPU hit per scrape
-/// (measured against `:konfig_bin_heapprof` in CU-86aj360ae).  Code
-/// addresses don't move within a process, so once we've resolved an
-/// address the answer is stable until the process exits.  Caching
+/// `gimli::macho::Object::parse` and a ~20 ms self-CPU hit per scrape.
+/// Code addresses don't move within a process, so once we've resolved
+/// an address the answer is stable until the process exits.  Caching
 /// at our layer (rather than per-call) makes the second and later
 /// `HeapProfile::symbolize` calls roughly free for the addresses they
 /// share with the first.
 ///
 /// The cache is held behind `Arc<Mutex<...>>` so that
 /// [`clear_symbol_cache`] can flush the contents without dropping the
-/// cell itself -- tests rely on the cell's identity surviving a
-/// flush so they can assert "the cache is the same object across
-/// `write_pprof_gz` calls" (CU-86aj3uw04 acceptance).
+/// cell itself -- tests rely on the cell's identity surviving a flush
+/// so they can assert the cache is the same object across
+/// `write_pprof_gz` calls.
 #[cfg(feature = "symbolicate")]
 pub(crate) mod symbol_cache {
     use super::{resolve_one, Arc, HashMap, Mutex, OnceLock, ResolvedFrame};
@@ -2210,9 +2204,9 @@ mod tests {
         assert_eq!(lines[0], "0x000000000000abcd 4096");
     }
 
-    /// CU-86aj3uw04 acceptance: the symbol cache cell that backs
-    /// [`HeapProfile::symbolize`] is process-global and survives across
-    /// multiple `write_pprof_gz` calls.  We compare the raw pointer of
+    /// The symbol cache cell that backs [`HeapProfile::symbolize`] is
+    /// process-global and survives across multiple `write_pprof_gz`
+    /// calls.  We compare the raw pointer of
     /// the inner `Arc<Mutex<_>>` allocation -- two calls observing the
     /// same pointer prove they are looking at the same cache.
     ///

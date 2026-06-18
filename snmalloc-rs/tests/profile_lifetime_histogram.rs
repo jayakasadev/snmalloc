@@ -1,4 +1,4 @@
-//! Integration tests for the Phase 9.5 allocation-lifetime histogram.
+//! Integration tests for the allocation-lifetime histogram.
 //!
 //! [`snmalloc_rs::HeapProfile::lifetime_histogram`] returns a snapshot
 //! of a process-wide log2-spaced histogram of sampled-allocation
@@ -23,7 +23,7 @@ use std::time::Duration;
 // every allocation routes through the sampling path that the
 // allocation-lifetime histogram observes.  Without this install the
 // test binary's allocations would route through the OS allocator and
-// never feed the histogram.  See ClickUp 86aj0yehx (Phase 11.7).
+// never feed the histogram.
 #[global_allocator]
 static ALLOC: SnMalloc = SnMalloc;
 
@@ -89,15 +89,15 @@ fn lifetime_histogram_observes_sleep_window() {
     let before = HeapProfile::lifetime_histogram();
 
     // Allocate a *batch* of 1 MiB buffers rather than a single one.
-    // The Phase 9.5 lifetime hook only fires when the dealloc path
-    // observes a sampled slot, and on macos-14 release builds we
-    // sporadically see the sample fall on a different countdown
-    // boundary than the rate=1 reset above implies (the per-thread
-    // countdown is not flushed by `set_sampling_rate`).  Issuing N
-    // allocs makes the loss of any one of them irrelevant -- the
-    // assertion only requires *one* sample to complete the round-trip,
-    // and with rate=1 every alloc after the first guaranteed-fired
-    // one keeps firing.  See ticket 86aj0h83a for the macos-14 flake.
+    // The lifetime hook only fires when the dealloc path observes a
+    // sampled slot, and on macos-14 release builds we sporadically see
+    // the sample fall on a different countdown boundary than the
+    // rate=1 reset above implies (the per-thread countdown is not
+    // flushed by `set_sampling_rate`).  Issuing N allocs makes the
+    // loss of any one of them irrelevant -- the assertion only
+    // requires *one* sample to complete the round-trip, and with
+    // rate=1 every alloc after the first guaranteed-fired one keeps
+    // firing.
     const N_BUFS: usize = 16;
     let layout = Layout::from_size_align(1 << 20, 64).unwrap();
     let mut ptrs: Vec<*mut u8> = Vec::with_capacity(N_BUFS);

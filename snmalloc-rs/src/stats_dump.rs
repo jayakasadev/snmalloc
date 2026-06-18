@@ -1,4 +1,4 @@
-//! Safe Rust wrapper around the Phase 9.6 text-dump C ABI.
+//! Safe Rust wrapper around the text-dump C ABI.
 //!
 //! The underlying `snmalloc_dump_stats_to_buffer` follows snprintf
 //! truncation semantics; we use the standard two-phase pattern (size
@@ -12,7 +12,7 @@
 //! into the Rust archive (see `src/snmalloc/override/stats_dump.cc`),
 //! and the dump is just a formatter over `snmalloc_get_full_stats`.
 //! A non-stats / non-profile build still emits a readable header
-//! block, just with the wave-2 fields stuck at zero.
+//! block, just with the extended telemetry fields stuck at zero.
 
 extern crate alloc;
 extern crate std;
@@ -27,7 +27,7 @@ use crate::SnMalloc;
 
 impl SnMalloc {
     /// Format the current allocator telemetry into the supplied
-    /// `std::io::Write` sink (Phase 9.6).
+    /// `std::io::Write` sink.
     ///
     /// Internally a two-phase call into
     /// `snmalloc_dump_stats_to_buffer`: first a size-query with
@@ -69,7 +69,7 @@ impl SnMalloc {
 /// atomic counters that back [`crate::SnMalloc::full_stats`].  Safe to
 /// invoke from any thread at any point in the process lifetime.
 pub fn write_to<W: io::Write>(out: &mut W) -> io::Result<()> {
-    // Phase 1: size-query.  The C side guarantees this is a pure
+    // Pass 1: size-query.  The C side guarantees this is a pure
     // computation -- no allocator state is mutated, no buffer
     // touched.  Returns the byte count the dump *would* require,
     // not counting the trailing NUL.
@@ -83,7 +83,7 @@ pub fn write_to<W: io::Write>(out: &mut W) -> io::Result<()> {
         return Ok(());
     }
 
-    // Phase 2: real fill.  Reserve `needed + 1` bytes for the NUL
+    // Pass 2: real fill.  Reserve `needed + 1` bytes for the NUL
     // the C writer appends; we drop the NUL before forwarding to
     // the caller.
     let mut buf: Vec<u8> = Vec::with_capacity(needed + 1);

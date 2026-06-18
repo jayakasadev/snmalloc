@@ -1,4 +1,4 @@
-//! Integration test for the Phase 9.6 text-dump API.
+//! Integration test for the text-dump API.
 //!
 //! Exercises `SnMalloc::dump_stats(&mut impl Write)` end-to-end: the
 //! Rust safe wrapper -> `snmalloc_dump_stats_to_buffer` C ABI ->

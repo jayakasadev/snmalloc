@@ -1,4 +1,4 @@
-//! Integration tests for the Phase 10.1 deliverables:
+//! Integration tests for two hot-spot APIs:
 //!
 //!   A. `HeapProfile::top_sites(n, key)` -- pure post-processing
 //!      over the existing snapshot samples; no FFI involvement.
@@ -15,7 +15,7 @@ use snmalloc_rs::{BtSample, HeapProfile, HotSpotKey, SnMalloc};
 use std::alloc::{GlobalAlloc, Layout};
 
 // ---------------------------------------------------------------------------
-// Deliverable A -- HotSpot table tests (pure Rust, run in both builds).
+// Part A -- HotSpot table tests (pure Rust, run in both builds).
 // ---------------------------------------------------------------------------
 
 /// Construct two distinct stacks that share a leaf frame but differ
@@ -150,8 +150,8 @@ fn top_sites_handles_empty_stacks() {
 
 /// `CallSite` falls back to leaf-frame behaviour in the
 /// unsymbolicated build.  Documenting this with a test pins the
-/// current contract; the next-symbolicate phase would have to
-/// update the assertion.
+/// current contract; enabling symbolication would change the
+/// expected behaviour and require updating the assertion.
 #[test]
 fn top_sites_call_site_degrades_to_leaf() {
     let p = HeapProfile::from_samples(vec![
@@ -170,7 +170,7 @@ fn top_sites_call_site_degrades_to_leaf() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 11.3 -- symbolicate-aware CallSite tests.
+// Symbolicate-aware CallSite tests.
 //
 // These exercise the live backtrace-driven path of `top_sites` for
 // `HotSpotKey::CallSite`.  They are split across two compile-time
@@ -184,9 +184,7 @@ fn top_sites_call_site_degrades_to_leaf() {
 
 /// Capture a real return-address backtrace inside a uniquely named,
 /// non-inlined function.  Returning the frames lets the test
-/// resolve them via the symbolicator the same way Phase 4.5 did
-/// for its smoke test (see
-/// `snmalloc_rs_phase_4_4_symbolize_probe`).
+/// resolve them via the symbolicator.
 ///
 /// Two such probes are defined below: their bodies are identical
 /// but their *names* differ, which is exactly what gives the
@@ -328,7 +326,7 @@ fn callsite_fallback_when_unsymbolicated() {
 }
 
 // ---------------------------------------------------------------------------
-// Deliverable B -- address -> alloc-site reverse lookup tests.
+// Part B -- address -> alloc-site reverse lookup tests.
 // ---------------------------------------------------------------------------
 
 /// In the feature-off build, the FFI stub returns `-1`, so the

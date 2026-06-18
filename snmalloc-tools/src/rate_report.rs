@@ -1,8 +1,8 @@
 //! Streaming-mode rate reporter.
 //!
 //! Reads a line-oriented streaming event log emitted by an application
-//! using [`snmalloc_rs::ProfilingSession`] (Phase 5.1 streaming-mode
-//! API) and produces a per-site rate report: how many alloc / dealloc
+//! using [`snmalloc_rs::ProfilingSession`] and produces a per-site
+//! rate report: how many alloc / dealloc
 //! events landed at each site, the peak live-bytes high-watermark
 //! attributable to that site, and the alloc rate (events per second).
 //!

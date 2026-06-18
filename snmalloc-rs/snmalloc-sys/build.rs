@@ -60,14 +60,14 @@ struct BuildFeatures {
     notls: bool,
     win8compat: bool,
     stats: bool,
-    // Phase 11.6 -- tiered stats.  `stats_basic` enables the BASIC
-    // counter tier (frontend + backend, target <= 2% overhead);
-    // `stats_full` adds the per-size-class + lifetime histograms.
-    // The Cargo-feature wiring guarantees `stats-full` implies
-    // `stats-basic` (see snmalloc-sys/Cargo.toml `[features]`); we
-    // still mirror the implication here as a belt-and-braces guard
-    // so the CMake layer always sees a consistent BASIC=ON whenever
-    // FULL=ON, regardless of how the caller specified features.
+    // Tiered stats.  `stats_basic` enables the BASIC counter tier
+    // (frontend + backend, target <= 2% overhead); `stats_full` adds
+    // the per-size-class + lifetime histograms.  The Cargo-feature
+    // wiring guarantees `stats-full` implies `stats-basic` (see
+    // snmalloc-sys/Cargo.toml `[features]`); we still mirror the
+    // implication here as a belt-and-braces guard so the CMake layer
+    // always sees a consistent BASIC=ON whenever FULL=ON, regardless
+    // of how the caller specified features.
     stats_basic: bool,
     stats_full: bool,
     android_lld: bool,
@@ -255,14 +255,13 @@ impl BuilderDefine for cc::Build {
     }
 
     fn configure_cpp(&mut self, debug: bool, source_root: &Path) -> &mut Self {
-        // Phase 9.1: stats_export.cc carries the
-        // `snmalloc_get_full_stats` C ABI symbol consumed by the Rust
-        // `SnMalloc::full_stats()` getter.  Compiled into the same
-        // archive as rust.cc on the `build_cc` path so the symbol is
-        // available to the Rust binding regardless of which build
-        // backend the consumer picked.
+        // stats_export.cc carries the `snmalloc_get_full_stats` C ABI
+        // symbol consumed by the Rust `SnMalloc::full_stats()` getter.
+        // Compiled into the same archive as rust.cc on the `build_cc`
+        // path so the symbol is available to the Rust binding
+        // regardless of which build backend the consumer picked.
         //
-        // Phase 9.7: runtime_config.cc carries the
+        // runtime_config.cc carries the
         // `snmalloc_{set,get}_sample_interval` / `_decay_rate` /
         // `_max_local_cache` C ABI shims backing
         // `snmalloc::RuntimeConfig`.  Bundled alongside stats_export
@@ -270,12 +269,11 @@ impl BuilderDefine for cc::Build {
         // the runtime knobs are independent of the `profiling` /
         // `stats` Cargo features and useful in every build flavour.
         //
-        // Phase 9.6: stats_dump.cc carries the
-        // `snmalloc_dump_stats_to_buffer` C ABI plus the C++ overloads
-        // for the text-dump API.  Pure formatter over the Phase 9.1
-        // `snmalloc_get_full_stats`; bundled here so the Rust
-        // `SnMalloc::dump_stats` wrapper sees the symbol in every
-        // build flavour, with or without `stats` / `profiling`
+        // stats_dump.cc carries the `snmalloc_dump_stats_to_buffer`
+        // C ABI plus the C++ overloads for the text-dump API.  Pure
+        // formatter over `snmalloc_get_full_stats`; bundled here so
+        // the Rust `SnMalloc::dump_stats` wrapper sees the symbol in
+        // every build flavour, with or without `stats` / `profiling`
         // features.
         self.include(source_root.join("src"))
             .file(source_root.join("src/snmalloc/override/rust.cc"))
@@ -340,12 +338,12 @@ impl BuildFeatures {
             notls: cfg!(feature = "notls"),
             win8compat: cfg!(feature = "win8compat"),
             stats: cfg!(feature = "stats"),
-            // Phase 11.6 -- tiered stats.  `stats-full` implies
-            // `stats-basic` in Cargo, so the OR below collapses to
-            // a single source of truth.  Legacy `stats` is an alias
-            // for `stats-basic` (`stats = ["stats-basic"]` in
-            // Cargo.toml), so callers passing the old feature name
-            // still light up the BASIC tier without changes.
+            // Tiered stats.  `stats-full` implies `stats-basic` in
+            // Cargo, so the OR below collapses to a single source of
+            // truth.  Legacy `stats` is an alias for `stats-basic`
+            // (`stats = ["stats-basic"]` in Cargo.toml), so callers
+            // passing the old feature name still light up the BASIC
+            // tier without changes.
             stats_basic: cfg!(feature = "stats-basic")
                 || cfg!(feature = "stats-full")
                 || cfg!(feature = "stats"),
@@ -501,8 +499,8 @@ fn configure_platform(config: &mut BuildConfig) {
     config.builder
         .define("SNMALLOC_QEMU_WORKAROUND", if config.features.qemu { "ON" } else { "OFF" })
         .define("SNMALLOC_ENABLE_DYNAMIC_LOADING", if config.features.notls { "ON" } else { "OFF" })
-        // Phase 11.6 -- tiered stats.  We deliberately drive BASIC
-        // and FULL separately rather than relying on the legacy
+        // Tiered stats.  We deliberately drive BASIC and FULL
+        // separately rather than relying on the legacy
         // SNMALLOC_STATS=ON pathway: the CMake layer treats
         // SNMALLOC_STATS as a backwards-compatible alias for
         // SNMALLOC_STATS_BASIC, but consumers who explicitly
@@ -723,24 +721,23 @@ fn main() {
 
     configure_linking(&config);
 
-    // Best-effort: copy the branch-hint inventory sidecar (Phase 10.2) into
-    // OUT_DIR so downstream Rust consumers (snmalloc-tools, Phase 10.4) can
-    // locate it via a stable path. Failures are deliberately non-fatal —
-    // ordinary builds must keep working even when CMake's
-    // branch_hints_inventory target hasn't run (e.g. no Python on the host,
-    // or building with `feature = "build_cc"`).
+    // Best-effort: copy the branch-hint inventory sidecar into OUT_DIR so
+    // downstream Rust consumers (snmalloc-tools) can locate it via a stable
+    // path. Failures are deliberately non-fatal — ordinary builds must keep
+    // working even when CMake's branch_hints_inventory target hasn't run
+    // (e.g. no Python on the host, or building with `feature = "build_cc"`).
     export_branch_hints_sidecar(&config);
 }
 
 /// Locate the JSON sidecar produced by CMake's `branch_hints_inventory`
 /// target (if any) and copy it into OUT_DIR. Emits no errors on failure.
 ///
-/// Phase 11.2: the script is now vendored at
-/// `upstream/scripts/dump_branch_hints.py` so this works for consumers
-/// installing from the published `snmalloc-sys` crate, not just developers
-/// building inside the source tree. The vendored copy is the only one
-/// shipped in the crate tarball — the surrounding repo's `scripts/` dir is
-/// not included in the package (see `Cargo.toml` `include`).
+/// The script is vendored at `upstream/scripts/dump_branch_hints.py` so
+/// this works for consumers installing from the published `snmalloc-sys`
+/// crate, not just developers building inside the source tree. The vendored
+/// copy is the only one shipped in the crate tarball — the surrounding
+/// repo's `scripts/` dir is not included in the package (see `Cargo.toml`
+/// `include`).
 fn export_branch_hints_sidecar(config: &BuildConfig) {
     let dest = PathBuf::from(&config.out_dir).join("branch_hints.json");
 
@@ -763,7 +760,7 @@ fn export_branch_hints_sidecar(config: &BuildConfig) {
     // silent — the build must succeed without python3 installed.
     //
     // The script is resolved against `source_root` (= CARGO_MANIFEST_DIR
-    // /upstream); Phase 11.2 vendors it at `upstream/scripts/`. When
+    // /upstream), where it is vendored at `upstream/scripts/`. When
     // building from the published crate that's the only copy available;
     // when building inside the snmalloc repo it's the local vendored copy
     // (a duplicate of the canonical repo-root `scripts/` script).

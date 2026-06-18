@@ -1,5 +1,5 @@
-//! Loader for the `branch_hints.json` sidecar emitted by Phase 10.2
-//! (`scripts/dump_branch_hints.py`).
+//! Loader for the `branch_hints.json` sidecar emitted by
+//! `scripts/dump_branch_hints.py`.
 //!
 //! The sidecar is a flat JSON array of `{file, line, kind}` objects;
 //! `kind` is either `"LIKELY"` or `"UNLIKELY"` and corresponds to the

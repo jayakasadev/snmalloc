@@ -72,7 +72,7 @@ rust_library(
 # (~500 kB live set at startup, parses the binary's debug info on
 # first use).  If the consumer binary already links those crates for
 # any other reason (panic backtraces, tracing-error, etc.) the
-# incremental cost is near zero.  See CU-86aj360ae for the gap analysis.
+# incremental cost is near zero.
 rust_library(
     name = "snmalloc_rs_profiling_symbolicated",
     srcs = _CRATE_SRCS,
@@ -174,7 +174,7 @@ rust_test(
 # Symbolicate-feature integration test.  Compiled against the
 # `:snmalloc_rs_profiling_symbolicated` variant so the
 # `#![cfg(feature = "symbolicate")]` body is live and the symbolicator
-# (`backtrace`) is in the link.  CU-86aj360ae.
+# (`backtrace`) is in the link.
 rust_test(
     name = "profile_symbolize_test",
     srcs = ["tests/profile_symbolize.rs"],
