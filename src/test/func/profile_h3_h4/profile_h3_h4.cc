@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 3.4 unit tests for the H3 + H4 dealloc edge-case profile hooks.
+// Unit tests for the two dealloc edge-case profile hooks.
 //
-// H3 lives inside `Allocator::dealloc_remote` (corealloc.h, the
-// SecondaryAllocator escape arm).  It catches pointers whose pagemap
-// entry reports `!is_owned()` -- typically GWP-ASan guard pages, a
-// sandboxed SecondaryAllocator's pool, or other non-snmalloc memory
-// that snmalloc is being asked to free on behalf of the platform.
+// The first edge-case hook lives inside `Allocator::dealloc_remote`
+// (corealloc.h, the SecondaryAllocator escape arm).  It catches
+// pointers whose pagemap entry reports `!is_owned()` -- typically
+// GWP-ASan guard pages, a sandboxed SecondaryAllocator's pool, or other
+// non-snmalloc memory that snmalloc is being asked to free on behalf of
+// the platform.
 //
-// H4 lives inside the lazy-init lambda of
+// The second edge-case hook lives inside the lazy-init lambda of
 // `Allocator::dealloc_remote_slow` (corealloc.h).  When `check_init`
 // has to acquire an allocator before the free can proceed, the
 // acquired allocator may itself be the originating allocator -- so
-// the design re-enters `Allocator::dealloc(p)` from the top.  H4
+// the design re-enters `Allocator::dealloc(p)` from the top.  This hook
 // fires immediately before that recursive call to keep the
 // recursion-guard pair complete.
 //
@@ -23,24 +24,26 @@
 // that every dealloc hook depends on:
 //
 //   1. Idempotence -- multiple sequential `clear_profile_slot` calls
-//      on the same slot return non-null exactly once.  H1+H2+H3+H4
-//      can all fire on the same pointer (H1 always, H3 only on the
-//      SecondaryAllocator branch, H4 only on the lazy-init
-//      recursion); the CAS in `clear_profile_slot` guarantees only
-//      one of them publishes a release.
+//      on the same slot return non-null exactly once.  Every dealloc
+//      hook can fire on the same pointer (the main-path hook always,
+//      the SecondaryAllocator-branch hook and the lazy-init-recursion
+//      hook only on their respective edge cases); the CAS in
+//      `clear_profile_slot` guarantees only one of them publishes a
+//      release.
 //
-//   2. Triple- and quadruple-clear safety -- if the (purely
-//      hypothetical) future code path lets H1, H3, and the
-//      H4-driven recursive H1 all run on a single pointer, the
-//      sampled-list and node-pool invariants survive.
+//   2. Triple- and quadruple-clear safety -- if a (purely
+//      hypothetical) future code path lets the main-path hook, the
+//      SecondaryAllocator-branch hook, and the recursive main-path
+//      hook all run on a single pointer, the sampled-list and
+//      node-pool invariants survive.
 //
-//   3. nullptr robustness -- the H3 hook is gated by p_tame != null
-//      in the existing code, but `record_dealloc` itself is also
-//      nullptr-safe (early-return).  We confirm that contract here
-//      since H3 *is* reached for non-snmalloc-owned non-null
-//      pointers.
+//   3. nullptr robustness -- the SecondaryAllocator-branch hook is
+//      gated by p_tame != null in the existing code, but
+//      `record_dealloc` itself is also nullptr-safe (early-return).
+//      We confirm that contract here since that hook *is* reached for
+//      non-snmalloc-owned non-null pointers.
 //
-//   4. Default-config compile-time no-op -- both H3 and H4 must
+//   4. Default-config compile-time no-op -- both edge-case hooks must
 //      compile to literally nothing for `snmalloc::Config`, the
 //      default that does not carry the lazy provider.
 //
@@ -108,9 +111,10 @@ namespace
   }
 
   // =========================================================================
-  // Test 1: triple-clear idempotence -- H1 then H3 then a future H4-driven
-  // recursive H1 on a single populated slot.  Only the first must observe
-  // the live node; the rest must return nullptr without disturbing the
+  // Test 1: triple-clear idempotence -- the main-path hook, then the
+  // SecondaryAllocator-branch hook, then a future recursive main-path
+  // clear on a single populated slot.  Only the first must observe the
+  // live node; the rest must return nullptr without disturbing the
   // sampled list or the node pool.
   // =========================================================================
   void test_triple_clear_idempotence()
@@ -127,18 +131,18 @@ namespace
     const size_t live_pre = SamplerGlobals::list().debug_count();
     check(live_pre >= 1, "live count >= 1 before any clear");
 
-    // H1 (waist of Allocator::dealloc)
+    // Main-path hook (waist of Allocator::dealloc).
     SampledAlloc* first = clear_profile_slot(&slot);
     check(first == node, "first clear (H1) wins and returns the node");
 
-    // H3 (SecondaryAllocator branch) -- on a real run this only fires
+    // SecondaryAllocator-branch hook -- on a real run this only fires
     // for pointers whose pagemap entry reports !is_owned(), but the
     // CAS contract must hold for any caller.
     SampledAlloc* second = clear_profile_slot(&slot);
     check(
       second == nullptr, "second clear (H3) is a no-op -- no double release");
 
-    // H4 (recursive lazy-init arm of dealloc_remote_slow)
+    // Recursive lazy-init arm of dealloc_remote_slow.
     SampledAlloc* third = clear_profile_slot(&slot);
     check(third == nullptr, "third clear (H4) is a no-op -- no double release");
 
@@ -151,8 +155,8 @@ namespace
   }
 
   // =========================================================================
-  // Test 2: quadruple-clear robustness -- H1 + H2 + H3 + H4 all firing on
-  // the same slot (theoretical worst case).  This guards against any
+  // Test 2: quadruple-clear robustness -- all four dealloc hooks firing
+  // on the same slot (theoretical worst case).  This guards against any
   // future refactor that introduces an extra pass through the dealloc
   // pipeline.
   // =========================================================================
@@ -181,11 +185,11 @@ namespace
   }
 
   // =========================================================================
-  // Test 3: nullptr robustness.  H3 is the only hook that observes
-  // potentially-non-snmalloc pointers; we confirm that `record_dealloc`
-  // itself early-returns on nullptr (well below the
-  // find_profile_slot/clear path).  H4's path is also nullptr-safe by the
-  // same logic.
+  // Test 3: nullptr robustness.  The SecondaryAllocator-branch hook is
+  // the only one that observes potentially-non-snmalloc pointers; we
+  // confirm that `record_dealloc` itself early-returns on nullptr (well
+  // below the find_profile_slot/clear path).  The lazy-init-recursion
+  // hook's path is also nullptr-safe by the same logic.
   //
   // Because record_dealloc<Config> with the default Config is a
   // compile-time no-op, this is mostly a smoke test that the symbol is
@@ -209,15 +213,15 @@ namespace
   // =========================================================================
   // Test 4: cross-thread free with allocator-not-yet-initialised pressure.
   //
-  // The H4 hook lives on the lazy-init arm of dealloc_remote_slow: the
-  // path is taken when a thread frees a pointer it did not allocate and
-  // does not yet have a local allocator.  We approximate that by
-  // spawning a fresh batch of threads whose *first* action is a free of
-  // a pointer allocated elsewhere.  The thread therefore enters the
-  // dealloc pipeline with an uninitialised local allocator and goes
-  // through `dealloc_remote_slow` -> `check_init`.
+  // The lazy-init-recursion hook lives on the lazy-init arm of
+  // dealloc_remote_slow: the path is taken when a thread frees a pointer
+  // it did not allocate and does not yet have a local allocator.  We
+  // approximate that by spawning a fresh batch of threads whose *first*
+  // action is a free of a pointer allocated elsewhere.  The thread
+  // therefore enters the dealloc pipeline with an uninitialised local
+  // allocator and goes through `dealloc_remote_slow` -> `check_init`.
   //
-  // We cannot directly assert "H4 fired" because the hook is a
+  // We cannot directly assert that the hook fired because it is a
   // compile-time no-op in this TU's default Config.  We assert what we
   // can: no crash, and the sampled list invariants survive.
   // =========================================================================
@@ -256,9 +260,9 @@ namespace
 
   // =========================================================================
   // Test 5: default-config compile-time guard.  The default Config does
-  // not carry the lazy provider; both H3 and H4 must compile to a no-op
-  // call.  A successful build of this TU already proves it; we add a
-  // runtime confirmation that record_dealloc on a freshly-allocated
+  // not carry the lazy provider; both edge-case hooks must compile to a
+  // no-op call.  A successful build of this TU already proves it; we add
+  // a runtime confirmation that record_dealloc on a freshly-allocated
   // pointer leaves the global sampled list empty (because no slot was
   // ever populated).
   // =========================================================================

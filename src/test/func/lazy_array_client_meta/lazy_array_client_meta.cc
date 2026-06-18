@@ -1,5 +1,5 @@
 /**
- * Unit test for LazyArrayClientMetaDataProvider (Phase 2.0).
+ * Unit test for LazyArrayClientMetaDataProvider.
  *
  * Validates the structural invariants of the lazy-allocated per-slab
  * client-metadata provider:
@@ -39,7 +39,7 @@ namespace
 
   // --- Compile-time invariants -------------------------------------------
 
-  // Phase 2.0: exactly one pointer of inline overhead per slab.
+  // Exactly one pointer of inline overhead per slab.
   static_assert(
     sizeof(Storage) == sizeof(void*),
     "LazyArrayClientMetaDataProvider::StorageType must be exactly one "

@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 3.4 integration test for the heap profile (ticket 86ahrfx9g).
+// Integration test for the heap profile.
 //
-// Description from the ticket:
-//   "Multi-threaded alloc + cross-thread dealloc stress.  16 threads x
-//    100k allocs x varying size, mix of free-on-same-thread and
-//    cross-thread.  Assert: sample count within tolerance; SampledList
-//    drains; no crash; no leak above documented tolerance."
+// Multi-threaded alloc + cross-thread dealloc stress: 16 threads x 100k
+// allocs x varying size, mix of free-on-same-thread and cross-thread.
+// Asserts: sample count within tolerance; SampledList drains; no crash;
+// no leak above documented tolerance.
 //
 // This is the largest stress test in the profile suite and is the
 // canonical regression net for the H1 -> H4 hook surface.  Every dealloc
@@ -21,7 +20,7 @@
 //       lazy-init arm -- triggered organically by freshly-spawned
 //       threads whose first action is a cross-thread free.
 //
-// As with the other Phase 3.x tests, we build a custom snmalloc Config
+// As with the other profile tests, we build a custom snmalloc Config
 // that wires the `LazyArrayClientMetaDataProvider<ProfileSlot>` so
 // `config_has_profile_slot_v<Config>` is true and the hooks do real
 // work.  The OFF flavour (SNMALLOC_PROFILE undefined) runs the same
@@ -129,8 +128,8 @@ namespace
   //     Poisson expectation.
   //   * The set of `alloc_seq` values that existed pre-free does NOT
   //     remain on the SampledList post-drain, except up to a small
-  //     documented tolerance (the known thread-teardown straggler from
-  //     Phase 3.3 -- <= 1% + 4).
+  //     documented tolerance (the known thread-teardown straggler
+  //     -- <= 1% + 4).
   //   * The list ultimately drains to zero after `debug_drain` is
   //     called -- proving no leaked nodes.
   // =========================================================================
@@ -305,12 +304,11 @@ namespace
       check(queues[i].q.empty(), "cross-thread queue drained");
     }
 
-    // Verify how many pre-free seqs leaked.  Phase 3.3 documented a
-    // narrow thread-teardown straggler in `profile_e2e.cc` at <= 0.1%
-    // (~1 in 1250) under heavy concurrent stress.  Phase 3.4's H4 hook
-    // installs `record_dealloc` on the lazy-init recursion arm; if the
-    // straggler was a slow-path issue, the leak count here should be
-    // at or below that tolerance.
+    // Verify how many pre-free seqs leaked.  `profile_e2e.cc` documents
+    // a narrow thread-teardown straggler at <= 0.1% (~1 in 1250) under
+    // heavy concurrent stress.  The H4 hook installs `record_dealloc` on
+    // the lazy-init recursion arm; if the straggler was a slow-path
+    // issue, the leak count here should be at or below that tolerance.
     size_t leaked = 0;
     SamplerGlobals::list().snapshot([&](SampledAlloc* n) {
       for (uint64_t s : pre_free_seqs)

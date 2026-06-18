@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Realloc event hook tests (ticket 86aj0hk9y).
+// Realloc event hook tests.
 //
 // Exercises `snmalloc::profile::record_realloc`, the in-place realloc
 // hook plumbed through `snmalloc::libc::realloc` at
@@ -10,9 +10,9 @@
 //
 //   1. Alloc, then in-place realloc to a new size that lands in the
 //      SAME sizeclass.  Assert the persisted SampledList slot has its
-//      `requested_size` updated to the new value (option C from the
-//      ticket).  `allocated_size` is the sizeclass-rounded value and
-//      stays the same since the sizeclass did not change.
+//      `requested_size` updated in place to the new value.
+//      `allocated_size` is the sizeclass-rounded value and stays the
+//      same since the sizeclass did not change.
 //
 //   2. Out-of-place realloc (target size in a DIFFERENT sizeclass).
 //      The dealloc hook clears the original slot and the alloc hook
@@ -270,8 +270,8 @@ namespace
       post_seq != 0 && post_seq != pre_seq,
       "out-of-place realloc produced a fresh sample for the new pointer");
 
-    // The original sample's pre_seq must be gone (dealloc hook drained
-    // it via the H1 path).
+    // The original sample's pre_seq must be gone (the dealloc hook
+    // drained it).
     bool original_remains = false;
     SamplerGlobals::list().snapshot([&](SampledAlloc* n) {
       if (n->alloc_seq == pre_seq)

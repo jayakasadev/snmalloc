@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Unit tests for the snmalloc heap-profile Phase 2.2 sampler primitives.
+// Unit tests for the snmalloc heap-profile sampler primitives.
 //
 // Covers:
 //   - Sampler::record_alloc statistical distribution + weight unbiasedness
@@ -12,7 +12,7 @@
 //   - End-to-end: sampler fires, list contains node with captured stack
 //
 // These tests touch only the profile/ headers and do not exercise any
-// allocator path -- Phase 2.2 deliverables are purely additive.
+// allocator path -- the sampler primitives are purely additive.
 
 #include <atomic>
 #include <chrono>
@@ -440,7 +440,7 @@ namespace
     Sampler s;
     constexpr size_t R = 64;
 
-    // Phase 1: rate = 64 KiB, ~200 MiB allocated -> ~3200 samples.
+    // Stage 1: rate = 64 KiB, ~200 MiB allocated -> ~3200 samples.
     constexpr size_t T1 = 64 * 1024;
     constexpr size_t N1 = 3'000'000; // ~183 MiB
     Sampler::set_sampling_rate(T1);
@@ -455,7 +455,7 @@ namespace
       }
     }
 
-    // Phase 2: rate = 256 KiB, ~200 MiB allocated -> ~800 samples.
+    // Stage 2: rate = 256 KiB, ~200 MiB allocated -> ~800 samples.
     constexpr size_t T2 = 256 * 1024;
     constexpr size_t N2 = 3'000'000;
     Sampler::set_sampling_rate(T2);

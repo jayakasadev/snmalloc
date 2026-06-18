@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// C ABI shims for the Phase 9.7 runtime tunables.  The
+// C ABI shims for the runtime tunables.  The
 // implementation is intentionally tiny -- each function is a
 // one-line passthrough to the `snmalloc::RuntimeConfig` singleton in
 // `src/snmalloc/global/runtime_config.h`.  Symbols are exported

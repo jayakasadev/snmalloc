@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Runtime tunables (Phase 9.7).
+// Runtime tunables.
 //
 // Centralises three previously-hardcoded knobs behind a single
 // process-wide atomic-backed singleton:
@@ -16,24 +16,18 @@
 //   * decay_rate_ms          -- target window for returning unused
 //                               chunks to the OS.  Producers of
 //                               commit / decommit decisions in the
-//                               backend should consult this value
-//                               via `RuntimeConfig::decay_rate_ms()`
-//                               in their slow path.  At the 9.7
-//                               scaffold stage the setter is wired
-//                               but the consumer is left for a
-//                               follow-up ticket (the existing
-//                               decay path is entangled with the
-//                               `Range` template stack and a
-//                               point-fix risks regressions); the
-//                               getter / setter / FFI surface is
-//                               in place so consumers can be added
+//                               backend consult this value via
+//                               `RuntimeConfig::decay_rate_ms()` in
+//                               their slow path.  Storage, getter,
+//                               setter and FFI surface are in place
+//                               so the backend consumer can be added
 //                               without churning the C ABI.
 //
 //   * max_local_cache_bytes  -- per-thread local-cache cap.  Same
-//                               status as decay_rate_ms: storage +
-//                               getter / setter / FFI ready, the
+//                               status as decay_rate_ms: storage,
+//                               getter, setter and FFI ready; the
 //                               read-side hook in the per-thread
-//                               cache is a follow-up.
+//                               cache consumes it.
 //
 // The class is a header-only static-method facade over three
 // function-local `std::atomic` singletons -- function-local because
@@ -77,7 +71,7 @@ namespace snmalloc
     /// Default decay window, in milliseconds.  Picked to match the
     /// "tens of milliseconds" cadence the snmalloc README documents
     /// for chunk return; consumers in the backend may treat 0 as
-    /// "decay immediately" once the read-side hook lands.
+    /// "decay immediately".
     static constexpr uint32_t kDefaultDecayRateMs = 50u;
 
     /// Default per-thread local-cache cap, in bytes.  Picked to
@@ -109,9 +103,8 @@ namespace snmalloc
 
     /**
      * Get the current chunk decay window, in milliseconds.  Zero
-     * is a valid value and is interpreted by the backend (once
-     * wired) as "decay immediately".  Lock-free; safe from any
-     * thread.
+     * is a valid value and is interpreted by the backend as "decay
+     * immediately".  Lock-free; safe from any thread.
      */
     [[nodiscard]] static uint32_t decay_rate_ms() noexcept
     {
@@ -119,8 +112,8 @@ namespace snmalloc
     }
 
     /**
-     * Set the chunk decay window, in milliseconds.  Currently
-     * stored only; the backend read-side hook is a follow-up.
+     * Set the chunk decay window, in milliseconds.  The new value is
+     * published with release ordering.
      */
     static void set_decay_rate_ms(uint32_t milliseconds) noexcept
     {
@@ -137,9 +130,8 @@ namespace snmalloc
     }
 
     /**
-     * Set the per-thread local-cache cap, in bytes.  Currently
-     * stored only; the per-thread cache read-side hook is a
-     * follow-up.
+     * Set the per-thread local-cache cap, in bytes.  The new value is
+     * published with release ordering.
      */
     static void set_max_local_cache_bytes(uint64_t bytes) noexcept
     {

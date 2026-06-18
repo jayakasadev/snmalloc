@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //
-// Phase 7.3 — validate that compiling the heap-profile lazy provider into
-// the build adds zero bytes to slab metadata when SNMALLOC_PROFILE is OFF,
-// and that the dealloc-side null-slot fast-path is well-predicted when
-// profiling is ON but no samples ever fire (ticket 86ahrfybd).
+// Validate that compiling the heap-profile lazy provider into the build adds
+// zero bytes to slab metadata when SNMALLOC_PROFILE is OFF, and that the
+// dealloc-side null-slot fast-path is well-predicted when profiling is ON but
+// no samples ever fire.
 //
 // What this test asserts:
 //
@@ -18,8 +18,8 @@
 //                    ::PagemapEntry)
 //          which proves the lazy provider type is *defined* in the build
 //          but isn't *instantiated* into the default config's metadata.
-//       c. The Phase 7.1 cache-aligned `SamplerHotState` puts
-//          `bytes_until_sample` at offset 0 within the hot struct.
+//       c. The cache-aligned `SamplerHotState` puts `bytes_until_sample`
+//          at offset 0 within the hot struct.
 //
 //   (2) Sampler hot-path overhead — runtime.
 //       With SNMALLOC_PROFILE on we benchmark 1M allocs of size 32 under
@@ -128,8 +128,8 @@ namespace
       "sizeof(Config::PagemapEntry) == sizeof(NoProvider config "
       "PagemapEntry)");
 
-    // (1c) Phase 7.1: bytes_until_sample lives at offset 0 of the
-    // cache-aligned hot struct.
+    // (1c) bytes_until_sample lives at offset 0 of the cache-aligned hot
+    // struct.
     static_assert(
       Sampler::kBytesUntilSampleOffset == 0,
       "Phase 7.1: bytes_until_sample must be the first member of "
@@ -138,7 +138,7 @@ namespace
       Sampler::kBytesUntilSampleOffset == 0,
       "Sampler::SamplerHotState::bytes_until_sample at offset 0");
 
-    // Phase 7.1: the hot state struct should be cache-aligned.
+    // The hot state struct should be cache-aligned.
     static_assert(
       alignof(Sampler::SamplerHotState) >= 64,
       "Phase 7.1: SamplerHotState alignment should be at least 64 bytes "

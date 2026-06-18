@@ -31,9 +31,8 @@ namespace snmalloc
    * methods (`on_add(size_bits)` / `on_remove(size_bits)`) invoked
    * whenever the per-bucket cache/tree population changes by one.  The
    * default `BuddyNoHistogram` is a pair of no-ops; `LargeBuddyRange`
-   * substitutes a process-global atomic histogram so the Phase 11.4
-   * FullAllocStats getter can report a log2-bucketed view of free
-   * chunks.
+   * substitutes a process-global atomic histogram so callers can report
+   * a log2-bucketed view of free chunks.
    */
   template<
     typename Rep,
