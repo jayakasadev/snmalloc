@@ -2,44 +2,29 @@
 
 // SPDX-License-Identifier: MIT
 //
-// Backend fragmentation counters (Phase 9.4).
+// Backend fragmentation counters.
 //
-// Exposes three OS-level memory-accounting figures that the
-// `FullAllocStats` getter (`src/snmalloc/global/stats_export.h`)
-// surfaces across the C / Rust FFI boundary:
-//
-//   bytes_mapped              -- bytes the allocator currently has a
-//                                mapping for (i.e.  reserved address
-//                                space backed by the parent of the
-//                                CommitRange).
+// Exposes OS-level memory-accounting figures surfaced across the
+// C / Rust FFI boundary:
 //
 //   bytes_committed           -- bytes currently in the "in use" state
 //                                from the PAL's perspective; on POSIX
-//                                that means pages we've MADV_FREE'd-out
-//                                of via `notify_using` and not yet
-//                                released via `notify_not_using`.
+//                                that means pages handed to the OS via
+//                                `notify_using` and not yet released via
+//                                `notify_not_using`.
 //
-//   bytes_decommitted_to_os   -- cumulative number of bytes the
-//                                allocator has handed back to the OS
+//   bytes_decommitted_to_os   -- cumulative bytes handed back to the OS
 //                                via `PAL::notify_not_using` since
 //                                process start.  Strictly monotone.
 //
-// `bytes_mapped` mirrors the same `StatsRange` accounting that backs
-// the legacy `memory_stats()` getter -- the two views differ only in
-// units (live OS reservation vs. live OS reservation), so this header
-// reads it through `Alloc::Config::Backend::get_current_usage()` at
-// the export site rather than maintaining a second counter.  The two
-// other figures are owned by this header: `commitrange.h` increments
-// the atomics from inside its `notify_using` / `notify_not_using`
-// branches.
+// `commitrange.h` is the only writer, incrementing the atomics from its
+// `notify_using` / `notify_not_using` branches.  The backend path is not
+// the hot path (commit calls hit the PAL, which already issues a syscall
+// on most platforms), so the relaxed atomics introduce negligible
+// overhead.
 //
-// All counters are `stl::Atomic<size_t>`.  The backend path is not the
-// hot path (commit calls hit the PAL, which already issues a syscall
-// on most platforms), so the atomics introduce negligible overhead.
-//
-// Inline-definition `static` data members keep the symbols header-only
-// and avoid a new .cc file in the build graph; the linker collapses
-// the multiple TU definitions to one shared instance.
+// Inline `static` data members keep the symbols header-only; the linker
+// collapses the multiple TU definitions to one shared instance.
 
 #include "largebuddyrange.h"
 #include "snmalloc/stl/atomic.h"
@@ -59,10 +44,9 @@ namespace snmalloc
    * `size_t`-typed but the cast is safe on every platform snmalloc
    * supports (size_t is at most 64 bits).
    *
-   * The `free_chunk_count_by_log_size` histogram was added in Phase
-   * 11.4 alongside the bump of `SNMALLOC_FULL_STATS_VERSION` to 2.
-   * The 16 buckets correspond to chunk sizes from `MIN_CHUNK_SIZE`
-   * (typically 16 KiB) up to `MIN_CHUNK_SIZE << 15`, log2-spaced.
+   * The `free_chunk_count_by_log_size` buckets correspond to chunk
+   * sizes from `MIN_CHUNK_SIZE` (typically 16 KiB) up to
+   * `MIN_CHUNK_SIZE << 15`, log2-spaced.
    */
   struct BackendFragStats
   {
@@ -71,10 +55,10 @@ namespace snmalloc
     /** Cumulative bytes returned to the OS via `notify_not_using`. */
     uint64_t bytes_decommitted_to_os;
     /**
-     * Phase 11.4 -- log2-bucketed free-chunk histogram aggregated
-     * across every live `LargeBuddyRange` Buddy in the process.
-     * `free_chunk_count_by_log_size[i]` is the live count of free
-     * chunks of size `1 << (MIN_CHUNK_BITS + i)` bytes.
+     * Log2-bucketed free-chunk histogram aggregated across every live
+     * `LargeBuddyRange` Buddy in the process.
+     * `free_chunk_count_by_log_size[i]` is the live count of free chunks
+     * of size `1 << (MIN_CHUNK_BITS + i)` bytes.
      */
     uint64_t
       free_chunk_count_by_log_size[LargeBuddyFreeChunkHistogram::NUM_BUCKETS];
@@ -93,12 +77,11 @@ namespace snmalloc
    */
   struct BackendFragCounters
   {
-    // Phase 11.10: place each atomic on its own 64-byte cache line to
-    // eliminate false-sharing.  Without padding the two counters land
-    // in adjacent 8-byte slots in the same line; on the `medium_allocs`
-    // bench every chunk-class alloc bumps `bytes_committed` and may
-    // racily contend with a concurrent thread's `bytes_decommitted_to_os`
-    // increment on the same line, costing inter-core invalidations.
+    // alignas(64) places each atomic on its own cache line to avoid
+    // false sharing.  Without padding the two counters land in adjacent
+    // 8-byte slots in the same line; a thread bumping `bytes_committed`
+    // would then contend with a concurrent `bytes_decommitted_to_os`
+    // increment, costing inter-core invalidations.
     alignas(64) static inline stl::Atomic<size_t> bytes_committed{0};
     alignas(64) static inline stl::Atomic<size_t> bytes_decommitted_to_os{0};
 
@@ -107,9 +90,8 @@ namespace snmalloc
      * `CommitRange<PAL>::alloc_range` after the PAL hands the pages
      * back as in-use.
      *
-     * Phase 11.6 -- compiles to a no-op when SNMALLOC_STATS_BASIC is
-     * off, so backend ranges in the BASIC-off tier pay zero atomic
-     * overhead.
+     * Compiles to a no-op when SNMALLOC_STATS_BASIC is off, so backend
+     * ranges pay zero atomic overhead in that configuration.
      */
     static void on_commit(size_t size)
     {
@@ -128,8 +110,8 @@ namespace snmalloc
      * that double-frees) and bumps the cumulative
      * `bytes_decommitted_to_os` counter.
      *
-     * Phase 11.6 -- compiles to a no-op when SNMALLOC_STATS_BASIC is
-     * off, matching the no-op semantics of `on_commit`.
+     * Compiles to a no-op when SNMALLOC_STATS_BASIC is off, matching
+     * `on_commit`.
      */
     static void on_decommit(size_t size)
     {
@@ -175,16 +157,11 @@ namespace snmalloc
     out.bytes_decommitted_to_os =
       static_cast<uint64_t>(BackendFragCounters::bytes_decommitted_to_os.load(
         stl::memory_order_relaxed));
-    // Phase 11.4 -- snapshot the process-global LargeBuddyRange
-    // free-chunk histogram into the output.  The histogram is owned
-    // by `LargeBuddyFreeChunkHistogram` (see `largebuddyrange.h`)
-    // and is updated from inside `Buddy::add_block` /
-    // `Buddy::remove_block` whenever a chunk enters or leaves the
-    // free list at any log-size bucket.  Reading is free of any
-    // template-state dependency, so we do not need to look up the
-    // active Config's backend here -- a direct static snapshot is
-    // sufficient and matches the calling convention used for the
-    // `BackendFragCounters` reads above.
+    // Snapshot the process-global LargeBuddyRange free-chunk histogram.
+    // It is owned by `LargeBuddyFreeChunkHistogram` and updated from
+    // `Buddy::add_block` / `Buddy::remove_block` whenever a chunk enters
+    // or leaves the free list.  Reading has no template-state dependency,
+    // so a direct static snapshot suffices.
     LargeBuddyFreeChunkHistogram::snapshot(out.free_chunk_count_by_log_size);
     return out;
   }

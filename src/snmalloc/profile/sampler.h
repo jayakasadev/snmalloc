@@ -2,20 +2,13 @@
 //
 // Heap profiler -- per-thread Poisson sampler.
 //
-// Phase 2.2 of the heap-profiling milestone (ClickUp 86ahrfw19). Purely
-// additive: not yet wired into any allocator path, not gated on a profile
-// build flag, no behaviour change to existing code.
-//
 // Math: byte-counted Poisson process. Fast path is one signed-int subtract
-// + one branch. Slow path draws Exp(rate) using a branchless polynomial
-// approximation of log2 (no libm). See
-//   .claude/research/heap-profiling/profile-weight.md
-// for the weight formula contract.
+// + one branch. Slow path draws Exp(rate).
 //
-// Per-sample side-effects (wired at sample fire):
+// Per-sample side-effects at sample fire:
 //   1. Re-entrancy check via ReentrancyGuard.
 //   2. NodePool::acquire to get a SampledAlloc; drop on exhaustion.
-//   3. Stack capture via the profile FramePointerWalker.
+//   3. Stack capture via the profile stack walker.
 //   4. Populate SampledAlloc payload.
 //   5. SampledList::push to publish.
 
@@ -41,10 +34,9 @@
 #  endif
 #endif
 
-// Phase 7.1: cache-line width used for `SamplerHotState` alignment so the
-// per-thread fast-path counter does not false-share with neighbouring data.
-// Apple Silicon (and other 64-bit ARM platforms shipped by Apple) uses a
-// 128-byte L1 line; everything else we care about today is 64 bytes.
+// Cache-line width used for `SamplerHotState` alignment so the per-thread
+// fast-path counter does not false-share with neighbouring data. Apple
+// Silicon uses a 128-byte L1 line; everything else is 64 bytes.
 #ifndef SNMALLOC_CACHE_LINE_SIZE
 #  if defined(__APPLE__) && defined(__aarch64__)
 #    define SNMALLOC_CACHE_LINE_SIZE 128
@@ -56,8 +48,7 @@
 namespace snmalloc::profile
 {
   /**
-   * Raw per-thread fast-path countdown (Bundle tweak 2, ticket
-   * 86aj0jfwh).
+   * Raw per-thread fast-path countdown.
    *
    * Promoting the hot counter out of `Sampler` to a namespace-scope
    * `thread_local int64_t` lets the inlined alloc-side hook
@@ -69,8 +60,7 @@ namespace snmalloc::profile
    * Initialisation convention: `0` means "uninitialised; bootstrap on
    * first call".  The fast path's `<= 0` branch funnels the very first
    * allocation on a thread into the slow path, which then draws an
-   * Exp(rate) interval and seeds the counter via
-   * `record_alloc_slow_namespace_tls`.
+   * Exp(rate) interval and seeds the counter.
    *
    * The Sampler class retains its own `hot_.bytes_until_sample` for
    * member-API callers (unit tests construct stack-allocated `Sampler`
@@ -154,18 +144,18 @@ namespace snmalloc::profile
      * Side-effect on fire: the SampledAlloc node is pushed onto the
      * global SampledList. The caller has no responsibility for the node's
      * lifetime -- it stays on the list until the corresponding dealloc
-     * hook removes it (Phase 3).
+     * hook removes it.
      */
     SNMALLOC_FAST_PATH_INLINE bool record_alloc(
       uintptr_t alloc_addr,
       size_t requested_size,
       size_t allocated_size) noexcept
     {
-      // Phase 7.2 fast-path: a single TLS decrement + signed compare.
+      // Fast path: a single TLS decrement + signed compare.
       //
-      // Re-entrancy detection has been moved into `record_alloc_slow`
-      // (below).  Skipping the check on the hot path saves one TLS load
-      // and one mispredictable branch per allocation; the only behaviour
+      // Re-entrancy detection lives in `record_alloc_slow` (below).
+      // Skipping the check on the hot path saves one TLS load and one
+      // mispredictable branch per allocation; the only behaviour
       // difference is that under re-entry the per-thread countdown is
       // permitted to tick negative until the slow path next fires.  The
       // slow path observes the negative counter, notices the re-entry
@@ -175,13 +165,12 @@ namespace snmalloc::profile
       // overshoot via `rate - hot_.bytes_until_sample + requested_size`
       // so accuracy is preserved.
       //
-      // Bundle tweak 2 (86aj0jfwh): in production the alloc-side hook
-      // in `record.h` operates on a namespace-scope TLS counter
-      // (`bytes_until_sample`) and only calls into the Sampler on the
-      // slow path.  This member entry point is preserved unchanged for
-      // unit tests that exercise stack-allocated `Sampler` instances --
-      // those want per-instance counter state, which the namespace TLS
-      // cannot provide.
+      // In production the alloc-side hook in `record.h` operates on a
+      // namespace-scope TLS counter (`bytes_until_sample`) and only calls
+      // into the Sampler on the slow path.  This member entry point is
+      // preserved for unit tests that exercise stack-allocated `Sampler`
+      // instances -- those want per-instance counter state, which the
+      // namespace TLS cannot provide.
       hot_.bytes_until_sample -= static_cast<int64_t>(requested_size);
       // Fast-path stays in branch-predictor's favour: the vast majority of
       // allocations don't fire a sample (default 1-in-512KiB).
@@ -201,7 +190,7 @@ namespace snmalloc::profile
 
     /**
      * Slow-path-only entry used by the namespace-TLS fast path
-     * (`tl_record_alloc`, bundle tweak 2 - ticket 86aj0jfwh).
+     * (`tl_record_alloc`).
      *
      * The caller has already debited `requested_size` from the
      * namespace-scope `bytes_until_sample` and observed a non-positive
@@ -320,20 +309,19 @@ namespace snmalloc::profile
         return false;
       }
 
-      // Bundle tweak D (86aj0kdym): the per-Sampler bootstrap branch is
-      // detected via `interval_at_capture_ == 0` instead of a dedicated
-      // `initialized_` boolean.  `interval_at_capture_` is set to the
-      // active sampling rate (always strictly positive in this branch)
-      // immediately after a successful bootstrap, so it doubles as the
-      // "already bootstrapped" signal.  This saves a member load + branch
-      // every time the slow path is entered after the first sample (i.e.
-      // every ~rate bytes for the lifetime of the thread).
+      // The per-Sampler bootstrap branch is detected via
+      // `interval_at_capture_ == 0` instead of a dedicated `initialized_`
+      // boolean.  `interval_at_capture_` is set to the active sampling
+      // rate (always strictly positive in this branch) immediately after
+      // a successful bootstrap, so it doubles as the "already
+      // bootstrapped" signal.  This saves a member load + branch every
+      // time the slow path is entered after the first sample (i.e. every
+      // ~rate bytes for the lifetime of the thread).
       if (SNMALLOC_UNLIKELY(interval_at_capture_ == 0))
       {
-        // First-sample bootstrap (research §4): the initial countdown is
-        // itself drawn from Exp(rate). We do NOT auto-sample the first
-        // allocation -- that would reintroduce the same bias from the
-        // other direction.
+        // First-sample bootstrap: the initial countdown is itself drawn
+        // from Exp(rate). We do NOT auto-sample the first allocation --
+        // that would reintroduce the same bias from the other direction.
         seed_prng_if_needed();
         hot_.bytes_until_sample = draw_exponential(rate, prng_step()) -
           static_cast<int64_t>(requested_size);
@@ -469,11 +457,9 @@ namespace snmalloc::profile
      *
      * Uses libm `std::log`. The slow path fires at most once per ~`mean`
      * bytes of request, so the libm call is amortised to <<1 ns/alloc on
-     * the fast path. We avoided libm in earlier drafts (out of worry about
-     * reentrancy from inside allocator hot paths); in practice `log` on
-     * every libm we care about is a pure leaf function with no allocation
-     * and no global state. The `ReentrancyGuard` in record_alloc_slow
-     * provides defence-in-depth either way.
+     * the fast path. `log` is a pure leaf function with no allocation and
+     * no global state; the `ReentrancyGuard` in record_alloc_slow provides
+     * defence-in-depth against reentrancy either way.
      *
      * Conversion of `r` to a double in (0, 1]: take the top 53 bits as the
      * mantissa to avoid double-rounding; "(r >> 11) | 1" guarantees the
@@ -502,24 +488,24 @@ namespace snmalloc::profile
     }
 
   public:
-    // ---- layout-exposed types (public for Phase 7.3 offset asserts) -----
+    // ---- layout-exposed types (public for offset asserts) ---------------
     //
-    // Phase 7.1: pull the per-thread fast-path counter into a dedicated
-    // cache-line-aligned struct, with `bytes_until_sample` as the first
-    // member.  Cache-line aligned so concurrent dealloc clears on the same
-    // thread don't false-share with the sampler hot path.
+    // The per-thread fast-path counter lives in a dedicated cache-line-
+    // aligned struct, with `bytes_until_sample` as the first member.
+    // Cache-line aligned so concurrent dealloc clears on the same thread
+    // don't false-share with the sampler hot path.
     struct alignas(SNMALLOC_CACHE_LINE_SIZE) SamplerHotState
     {
       int64_t bytes_until_sample{0};
     };
 
-    /// Phase 7.3 layout check: the hot counter is the first member of the
-    /// hot state struct (offset 0 within the cache-aligned region).
+    /// Layout check: the hot counter is the first member of the hot state
+    /// struct (offset 0 within the cache-aligned region).
     static constexpr size_t kBytesUntilSampleOffset =
       offsetof(SamplerHotState, bytes_until_sample);
     static_assert(
       kBytesUntilSampleOffset == 0,
-      "Phase 7.1/7.3: bytes_until_sample must be the first member of "
+      "bytes_until_sample must be the first member of "
       "SamplerHotState so it sits at offset 0 of the cache-aligned region");
 
   private:
@@ -542,8 +528,7 @@ namespace snmalloc::profile
   inline thread_local Sampler tl_sampler;
 
   /**
-   * Production alloc-side fast-path entry (bundle tweak 2, ticket
-   * 86aj0jfwh).
+   * Production alloc-side fast-path entry.
    *
    * Called from `profile::record_alloc<Config>` in record.h.  The
    * fast-path body lives in a free function so the compiler sees a

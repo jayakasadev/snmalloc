@@ -3,9 +3,7 @@
 // Heap profiler -- global lock-free intrusive list of currently-sampled
 // allocations.
 //
-// Phase 2.2 of the heap-profiling milestone. Purely additive.
-//
-// Design (chosen Design A from research, see synthesis):
+// Design:
 //   - Singly-linked intrusive Treiber stack on `head_`.
 //   - Tombstone bit packed into the low bit of `SampledAlloc::next`
 //     (which is the same word read by traversers, so liveness + link

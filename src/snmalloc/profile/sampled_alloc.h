@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
 // Heap profiler -- record for a single sampled allocation.
-//
-// Phase 2.2 of the heap-profiling milestone. Purely additive: not yet wired
-// into any allocator path; no SNMALLOC_PROFILE gating.
-//
-// See:
-//   .claude/research/heap-profiling/profile-weight.md  -- weight contract
-//   .claude/research/heap-profiling/synthesis.md       -- integration plan
 
 #pragma once
 
@@ -76,7 +69,7 @@ namespace snmalloc::profile
    * the tombstone marker (SampledAlloc is cache-line aligned so the low bits
    * of any node pointer are free).
    *
-   * Weight semantics (per profile-weight.md):
+   * Weight semantics:
    *   `weight` is in bytes of *request* (matches tcmalloc convention).
    *   Allocated-byte view at dump time:
    *     allocated_view = weight * allocated_size / (requested_size + 1)
@@ -113,8 +106,8 @@ namespace snmalloc::profile
     /// `std::chrono::steady_clock` in `Sampler::record_alloc_slow`.
     /// Used by `clear_profile_slot` (the dealloc path for sampled
     /// allocations) to compute the elapsed lifetime and bump the
-    /// global `LifetimeHistogram` (Phase 9.5).  Zero on nodes that
-    /// were never published as part of a fired sample.
+    /// global `LifetimeHistogram`.  Zero on nodes that were never
+    /// published as part of a fired sample.
     uint64_t alloc_ts_ns{0};
 
     uintptr_t stack[MaxStackFrames];

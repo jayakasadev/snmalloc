@@ -2,9 +2,9 @@
 //
 // Heap profiler -- umbrella header for the snmalloc heap-profile subsystem.
 //
-// Phase 2.2 of the heap-profiling milestone. Purely additive; including
-// this header does NOT enable profiling on any allocator path. The
-// integration with snmalloc::alloc()/dealloc() is Phase 3 work.
+// Pulling in this header only makes the subsystem's types visible; it does
+// not enable profiling on any allocator path.  Sampling is wired in at the
+// alloc/dealloc hooks in corealloc.h, gated on SNMALLOC_PROFILE.
 //
 // Components:
 //   sampler.h           -- per-thread Poisson sampler

@@ -2,8 +2,6 @@
 //
 // Heap profiler -- per-thread re-entrancy guard for the sampler slow path.
 //
-// Phase 2.2 of the heap-profiling milestone. Purely additive.
-//
 // Why: when the sampler fires a sample it walks the stack, claims a node
 // from the pool, and publishes on a list. Some of those steps may transitively
 // allocate (the canonical example is glibc's backtrace() which mallocs a

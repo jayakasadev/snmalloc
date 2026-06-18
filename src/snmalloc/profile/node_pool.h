@@ -2,8 +2,6 @@
 //
 // Heap profiler -- pre-allocated lock-free pool of SampledAlloc nodes.
 //
-// Phase 2.2 of the heap-profiling milestone. Purely additive.
-//
 // Design:
 //   - Storage is one contiguous region of Capacity SampledAlloc objects,
 //     allocated via the OS directly (mmap on POSIX, VirtualAlloc on

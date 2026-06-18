@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Heap profiler -- address -> alloc-site reverse lookup (Phase 10.1B).
+// Heap profiler -- address -> alloc-site reverse lookup.
 //
 // Given an arbitrary heap address (e.g. a sample from a PMU-driven sampler
 // such as Linux perf cycle/cache-miss events), return the captured
@@ -8,28 +8,26 @@
 // only if that allocation is still live AND was itself selected by the
 // Poisson sampler.
 //
-// Design choice (per the Phase 10.1 scope guardrails): rather than thread
-// an interval tree into the lock-free SampledList, this header builds a
-// transient sorted index from a single SampledList snapshot at lookup
-// time.  Costs:
+// Rather than thread an interval tree into the lock-free SampledList, this
+// header builds a transient sorted index from a single SampledList
+// snapshot at lookup time.  Costs:
 //
 //   - O(N log N) build per call (sort by base address).
 //   - O(log N) binary-search query.
 //
 // where N is the count of currently-live sampled allocations.  With the
 // default 512 KiB sampling rate, N tops out at ~few thousand on most
-// workloads, so even a per-call rebuild is bounded by single-digit
+// workloads, so a per-call rebuild is bounded by single-digit
 // milliseconds and avoids touching the lock-free Treiber-stack invariants
-// in `sampled_list.h`.  The trade-off matters because the lookup itself
-// is by definition an out-of-band, off-the-hot-path operation (driven by
-// PMU samples or post-mortem inspection); the work performed at lookup
-// time is irrelevant to allocator throughput.
+// in `sampled_list.h`.  Lookup is off the alloc hot path (driven by PMU
+// samples or offline inspection), so its cost is irrelevant to allocator
+// throughput.
 //
 // Interior pointers are supported: a query address falling anywhere
 // inside [base_addr, base_addr + allocated_size) matches.  A pointer
 // outside every live sampled range yields std::nullopt.
 //
-// Concurrency: the snapshot walk uses the existing lock-free
+// Concurrency: the snapshot walk uses the lock-free
 // `SampledList::snapshot` API -- concurrent allocs and frees mid-walk
 // are tolerated by construction (linearisable against the tombstone
 // CAS).  We never mutate the SampledList from this code path.
