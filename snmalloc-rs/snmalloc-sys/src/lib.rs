@@ -64,16 +64,16 @@ extern "C" {
 ///
 /// History:
 ///
-/// * `1` -- initial wire format (Phase 9.1 scaffold + waves 9.2-9.6).
-/// * `2` -- Phase 11.4: `reserved[0..15]` carries the
-///   `LargeBuddyRange` free-chunk histogram (log2-bucketed counts of
-///   currently-free chunks).  See [`SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS`].
+/// * `1` -- initial wire format.
+/// * `2` -- `reserved[0..15]` carries the `LargeBuddyRange` free-chunk
+///   histogram (log2-bucketed counts of currently-free chunks).  See
+///   [`SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS`].
 pub const SNMALLOC_FULL_STATS_VERSION: u32 = 2;
 
-/// Number of log2 buckets occupied by the Phase 11.4 free-chunk
-/// histogram inside `reserved[]`.  Bucket `i` carries the count of
-/// currently-free chunks of size `1 << (MIN_CHUNK_BITS + i)` bytes
-/// held inside any `LargeBuddyRange` Buddy.  Must match
+/// Number of log2 buckets occupied by the free-chunk histogram inside
+/// `reserved[]`.  Bucket `i` carries the count of currently-free chunks
+/// of size `1 << (MIN_CHUNK_BITS + i)` bytes held inside any
+/// `LargeBuddyRange` Buddy.  Must match
 /// `SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS` in
 /// `src/snmalloc/global/stats_export.h`.
 pub const SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS: usize = 16;
@@ -93,19 +93,16 @@ pub const SNMALLOC_FULL_STATS_LIFETIME_BUCKETS: usize = 32;
 /// `src/snmalloc/global/stats_export.h`.
 pub const SNMALLOC_FULL_STATS_RESERVED_SLOTS: usize = 64;
 
-/// Aggregated allocator telemetry snapshot (Phase 9.1 scaffold).
+/// Aggregated allocator telemetry snapshot.
 ///
 /// Bit-for-bit mirror of `struct snmalloc_full_stats` in
 /// `src/snmalloc/global/stats_export.h`.  Field order and types here
 /// MUST match the C header exactly; the FFI getter
 /// [`snmalloc_get_full_stats`] writes through this layout.
 ///
-/// At the scaffold stage only `version`, `bytes_in_use`, and
-/// `peak_bytes_in_use` carry meaningful values; every other field is
-/// zero.  The remaining fields will be populated by the Phase 9
-/// wave-2 tickets (9.2 hot-path counters, 9.3 per-class histograms,
-/// 9.4 mapping accounting, 9.5 lifetime histogram) without changing
-/// the wire layout.
+/// Fields not populated by the current producer build read as zero.
+/// New fields are added without changing the wire layout of existing
+/// offsets.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct snmalloc_full_stats {
@@ -121,37 +118,36 @@ pub struct snmalloc_full_stats {
     /// High-water mark of `bytes_in_use`.
     pub peak_bytes_in_use: u64,
 
-    /// Phase 9.4 -- bytes currently mapped from the OS.
+    /// Bytes currently mapped from the OS.
     pub bytes_mapped: u64,
-    /// Phase 9.4 -- bytes currently committed (writable / RSS-eligible).
+    /// Bytes currently committed (writable / RSS-eligible).
     pub bytes_committed: u64,
-    /// Phase 9.4 -- cumulative bytes decommitted back to the OS.
+    /// Cumulative bytes decommitted back to the OS.
     pub bytes_decommitted_to_os: u64,
 
-    /// Phase 9.2 -- allocations satisfied entirely on the fast path.
+    /// Allocations satisfied entirely on the fast path.
     pub fast_path_allocs: u64,
-    /// Phase 9.2 -- allocations that fell through to the slow path.
+    /// Allocations that fell through to the slow path.
     pub slow_path_allocs: u64,
-    /// Phase 9.2 -- deallocations satisfied entirely on the fast path.
+    /// Deallocations satisfied entirely on the fast path.
     pub fast_path_deallocs: u64,
-    /// Phase 9.2 -- deallocations routed to a remote allocator.
+    /// Deallocations routed to a remote allocator.
     pub remote_deallocs: u64,
-    /// Phase 9.2 -- number of times the cross-thread message queue
-    /// has been drained.
+    /// Number of times the cross-thread message queue has been drained.
     pub message_queue_drains: u64,
-    /// Phase 9.2 -- total messages received from other threads.
+    /// Total messages received from other threads.
     pub cross_thread_messages_received: u64,
 
-    /// Phase 9.3 -- live bytes by size class.
+    /// Live bytes by size class.
     pub total_live_bytes_by_class: [u64; SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
-    /// Phase 9.3 -- live object count by size class.
+    /// Live object count by size class.
     pub total_live_count_by_class: [u64; SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
-    /// Phase 9.3 -- cumulative allocation count by size class.
+    /// Cumulative allocation count by size class.
     pub cumulative_alloc_by_class: [u64; SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
-    /// Phase 9.3 -- cumulative deallocation count by size class.
+    /// Cumulative deallocation count by size class.
     pub cumulative_dealloc_by_class: [u64; SNMALLOC_FULL_STATS_SIZECLASS_SLOTS],
 
-    /// Phase 9.5 -- log2-spaced allocation-lifetime histogram.
+    /// Log2-spaced allocation-lifetime histogram.
     pub lifetime_buckets_ns: [u64; SNMALLOC_FULL_STATS_LIFETIME_BUCKETS],
 
     /// Forward-compat reserve pool; new fields in later revisions are
@@ -162,9 +158,8 @@ pub struct snmalloc_full_stats {
 extern "C" {
     /// Populate `*out` with a coherent snapshot of allocator
     /// telemetry.  The implementation zero-initialises `*out` first,
-    /// then fills in `version`, `bytes_in_use`, and `peak_bytes_in_use`;
-    /// all other fields read as zero at the scaffold stage and will be
-    /// wired up by the Phase 9 wave-2 tickets.
+    /// then fills in every field the producer build supports; fields it
+    /// does not populate read as zero.
     ///
     /// `out` must be non-null and point at a properly-aligned
     /// `snmalloc_full_stats`.  No allocator state is mutated -- the
@@ -194,10 +189,7 @@ extern "C" {
     pub fn snmalloc_dump_stats_to_buffer(buf: *mut u8, buf_len: usize) -> usize;
 }
 
-// --------------------------------------------------------------------
-// Phase 9.7 -- runtime tunables.
-//
-// Three process-wide knobs that used to be compile-time constants:
+// Runtime tunables -- three process-wide knobs:
 //
 //   * sample interval (bytes) -- mean Poisson interval for the heap
 //     profiler.  Mirrors back into `Sampler::set_sampling_rate` when
@@ -206,14 +198,12 @@ extern "C" {
 //     build of the same binary.
 //
 //   * decay rate (ms) -- target window for returning unused chunks
-//     to the OS.  At 9.7 the setter and getter are wired; the
-//     backend read-side hook is a follow-up (the existing decay
-//     path is entangled enough that point-fixing it carries a
-//     regression risk best handled in its own ticket).
+//     to the OS.  The setter and getter are wired; the backend
+//     read-side hook is not yet connected.
 //
-//   * max local cache (bytes) -- per-thread cache cap.  Same
-//     status as decay rate: setter / getter live, read-side hook
-//     is a follow-up.
+//   * max local cache (bytes) -- per-thread cache cap.  Same status as
+//     decay rate: setter / getter live, read-side hook not yet
+//     connected.
 //
 // All six symbols are exported unconditionally by the C build (see
 // `src/snmalloc/override/runtime_config.cc`).  They are NOT gated on
@@ -304,11 +294,11 @@ pub const SN_RUST_PROFILE_KIND_RESIZE: u8 = 1;
 /// is still well-defined; the snapshot calls will simply not produce any
 /// samples to populate it.
 ///
-/// Wire-format version 2 (realloc event hook -- ticket 86aj0hk9y):
-/// v2 appends the trailing `kind` byte.  The v1 prefix is bit-identical
-/// so old snapshot consumers that only read the v1 fields work
-/// unchanged; new consumers should consult `kind` to distinguish
-/// `Alloc` from `Resize` events in streaming mode.
+/// Wire-format version 2 (realloc event hook): v2 appends the trailing
+/// `kind` byte.  The v1 prefix is bit-identical so old snapshot
+/// consumers that only read the v1 fields work unchanged; new consumers
+/// should consult `kind` to distinguish `Alloc` from `Resize` events in
+/// streaming mode.
 ///
 /// The struct is exposed unconditionally (independent of the Rust
 /// `profiling` Cargo feature) because the matching C symbols in
@@ -350,9 +340,9 @@ pub struct SnRustProfileRawSample {
 // undefined they degrade to no-op stubs that return `0` / `false` /
 // `nullptr`.  Exposing the Rust extern block unconditionally lets the
 // higher-level `snmalloc-rs` crate expose a uniform safe API in both
-// `profiling`-feature-on and `profiling`-feature-off builds (per the
-// Phase 4.1 contract: `profiling_supported()` returns `false` and
-// `snapshot()` returns an empty profile when the C build is OFF).
+// `profiling`-feature-on and `profiling`-feature-off builds:
+// `profiling_supported()` returns `false` and `snapshot()` returns an
+// empty profile when the C build is OFF.
 extern "C" {
     /// Returns `true` iff this build of snmalloc was compiled with
     /// `SNMALLOC_PROFILE=ON`.  When `false`, every other `sn_rust_profile_*`
@@ -392,7 +382,7 @@ extern "C" {
     pub fn sn_rust_profile_snapshot_end(handle: *mut c_void);
 
     /// Reverse-lookup the alloc-site of `addr` against the live
-    /// sampled-allocation list (Phase 10.1B).
+    /// sampled-allocation list.
     ///
     /// Writes up to `max_frames` captured return addresses (innermost
     /// first) into `out_frames`.  Optionally writes the matched
@@ -410,8 +400,8 @@ extern "C" {
         out_allocated_size: *mut usize,
     ) -> isize;
 
-    /// Copy the lifetime-histogram buckets (Phase 9.5) into
-    /// `out_buckets`.  Writes `min(len, SN_RUST_PROFILE_LIFETIME_BUCKETS)`
+    /// Copy the lifetime-histogram buckets into `out_buckets`.
+    /// Writes `min(len, SN_RUST_PROFILE_LIFETIME_BUCKETS)`
     /// `u64` entries in bucket-index order and returns the number of
     /// entries written.  Returns `0` (and writes nothing) when
     /// `out_buckets` is null, `len` is zero, or the C build has
@@ -422,14 +412,14 @@ extern "C" {
     ) -> usize;
 }
 
-/// Number of buckets in the allocation-lifetime histogram (Phase 9.5).
+/// Number of buckets in the allocation-lifetime histogram.
 /// Must match `SN_RUST_PROFILE_LIFETIME_BUCKETS` in
 /// `src/snmalloc/override/rust_profile.h` and
 /// `snmalloc::profile::kLifetimeBuckets`.
 pub const SN_RUST_PROFILE_LIFETIME_BUCKETS: usize = 32;
 
-// Streaming-mode broadcast (Phase 5.1): a single user callback is invoked
-// once per sampled allocation, off the hot path of `record_alloc`.  The C
+// Streaming-mode broadcast: a single user callback is invoked once per
+// sampled allocation, off the hot path of `record_alloc`.  The C
 // implementation enforces a single registered callback at a time; the
 // safe Rust wrapper in `snmalloc-rs` layers a `Mutex`-protected
 // `Box<dyn Fn>` on top to expose a borrowed view of the raw sample

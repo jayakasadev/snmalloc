@@ -132,7 +132,7 @@ namespace
     // struct.
     static_assert(
       Sampler::kBytesUntilSampleOffset == 0,
-      "Phase 7.1: bytes_until_sample must be the first member of "
+      "bytes_until_sample must be the first member of "
       "SamplerHotState (offset 0 within the cache-aligned region).");
     check(
       Sampler::kBytesUntilSampleOffset == 0,
@@ -141,7 +141,7 @@ namespace
     // The hot state struct should be cache-aligned.
     static_assert(
       alignof(Sampler::SamplerHotState) >= 64,
-      "Phase 7.1: SamplerHotState alignment should be at least 64 bytes "
+      "SamplerHotState alignment should be at least 64 bytes "
       "to avoid false-sharing with neighbouring sampler state.");
     check(
       alignof(Sampler::SamplerHotState) >= 64,

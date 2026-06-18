@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: MIT
 //
 // Implementation of the FullAllocStats getter declared in
-// `src/snmalloc/global/stats_export.h` (Phase 9.1 scaffold).
+// `src/snmalloc/global/stats_export.h`.
 //
 // This compilation unit is intentionally tiny: it only needs to see the
-// `Alloc::Config::Backend` accessors that already back the existing
+// `Alloc::Config::Backend` accessors that also back the
 // `malloc-extensions.cc` and `rust.cc` stats getters.  No allocator
-// state is mutated; the call is a pure read.  All non-`bytes_in_use`
-// / `peak_bytes_in_use` fields are zeroed via `memset` first, leaving
-// the wave-2 tickets free to populate them without touching this file.
+// state is mutated; the call is a pure read.  All fields other than
+// `bytes_in_use` / `peak_bytes_in_use` are zeroed via `memset` first.
 
 #include "snmalloc/global/stats_export.h"
 
 #include "../snmalloc.h"
 
-// Phase 11.6 -- lifetime histogram only needed when both PROFILE
-// (the producer) and FULL (the snapshot consumer surface) are on.
+// Lifetime histogram is only needed when both PROFILE (the producer)
+// and FULL (the snapshot consumer surface) are on.
 #if defined(SNMALLOC_PROFILE) && defined(SNMALLOC_STATS_FULL)
 #  include "snmalloc/profile/lifetime_histogram.h"
 #endif
@@ -30,10 +29,9 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
   if (out == nullptr)
     return;
 
-  // Zero-fill first so every field that the wave-2 tickets haven't
-  // wired up yet reads as zero -- and so the trailing `reserved[]`
-  // pool and future-version slots are guaranteed to be all-zero on
-  // older producers.
+  // Zero-fill first so every unpopulated field reads as zero -- and so
+  // the trailing `reserved[]` pool and future-version slots are
+  // guaranteed to be all-zero on older producers.
   memset(out, 0, sizeof(*out));
 
   out->version = SNMALLOC_FULL_STATS_VERSION;
@@ -47,7 +45,7 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
   out->peak_bytes_in_use =
     static_cast<uint64_t>(Alloc::Config::Backend::get_peak_usage());
 
-  // Phase 9.4 -- backend fragmentation.
+  // Backend fragmentation.
   //
   // `bytes_mapped` reuses the same `StatsRange` accounting that drives
   // `bytes_in_use`: snmalloc only ever has live mappings for memory it
@@ -61,13 +59,13 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
     out->bytes_committed = frag.bytes_committed;
     out->bytes_decommitted_to_os = frag.bytes_decommitted_to_os;
 
-    // Phase 11.4 -- copy the LargeBuddyRange free-chunk histogram
-    // into the first `SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS` slots
-    // of `reserved[]`.  This is the additive change that bumps the
-    // wire-format version from 1 to 2.  Consumers compiled against
-    // version 1 see `reserved[0..15]` as part of the opaque
-    // forward-compat block and ignore it -- the change does not
-    // disturb the layout of any previously-defined field above.
+    // Copy the LargeBuddyRange free-chunk histogram into the first
+    // `SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS` slots of `reserved[]`.
+    // This additive change bumps the wire-format version from 1 to 2.
+    // Consumers compiled against version 1 see `reserved[0..15]` as
+    // part of the opaque forward-compat block and ignore it -- the
+    // change does not disturb the layout of any previously-defined
+    // field above.
     static_assert(
       SNMALLOC_FULL_STATS_FREECHUNK_BUCKETS <=
         SNMALLOC_FULL_STATS_RESERVED_SLOTS,
@@ -82,23 +80,22 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
     }
   }
 
-  // Phase 9.5 -- lifetime histogram.
+  // Lifetime histogram.
   //
-  // Bump-recorded in `clear_profile_slot` (the dealloc path for
-  // sampled allocations) whenever a sample completes its lifecycle.
-  // Only meaningful when `SNMALLOC_PROFILE` is defined: without
-  // profile support, no sample ever fires so the histogram singleton
-  // is never touched and the field below stays at zero (consistent
-  // with the `memset` above).  We still emit the loop under
-  // `#ifdef` so a non-profile build does not link against the
-  // singleton accessor.
+  // Bump-recorded on the dealloc path for sampled allocations whenever
+  // a sample completes its lifecycle.  Only meaningful when
+  // `SNMALLOC_PROFILE` is defined: without profile support, no sample
+  // ever fires so the histogram singleton is never touched and the
+  // field below stays at zero (consistent with the `memset` above).
+  // We still emit the loop under `#ifdef` so a non-profile build does
+  // not link against the singleton accessor.
 #if defined(SNMALLOC_PROFILE) && defined(SNMALLOC_STATS_FULL)
-  // Phase 11.6 -- the lifetime histogram is part of the FULL tier
-  // surface.  We still require SNMALLOC_PROFILE for the bucket bumps
-  // themselves to happen (profile/record.h gates the increment site),
-  // but in BASIC builds we additionally skip even the snapshot read
-  // here so callers observe a fully zero `lifetime_buckets_ns[]`
-  // array and the BASIC build pays nothing for this surface.
+  // The lifetime histogram is part of the FULL tier surface.  We
+  // require SNMALLOC_PROFILE for the bucket bumps themselves to happen
+  // (profile/record.h gates the increment site), but in BASIC builds
+  // we additionally skip even the snapshot read here so callers
+  // observe a fully zero `lifetime_buckets_ns[]` array and the BASIC
+  // build pays nothing for this surface.
   {
     auto& hist = snmalloc::profile::LifetimeHistogram::get();
     static_assert(
@@ -112,9 +109,8 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
 #endif
 
 #ifdef SNMALLOC_STATS_BASIC
-  // Phase 9.2 -- frontend stats aggregation (ticket 86aj0tr1e).
-  // Phase 11.6 -- gated on SNMALLOC_STATS_BASIC; the per-class
-  // histogram aggregation (9.3) is nested inside the FULL guard
+  // Frontend stats aggregation, gated on SNMALLOC_STATS_BASIC.  The
+  // per-class histogram aggregation is nested inside the FULL guard
   // below so the BASIC tier does not iterate the
   // `size_class_stats_global()` array nor read per-allocator
   // `sc_stats` blocks (the latter does not exist in the BASIC
@@ -153,9 +149,9 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
     size_class_stats_global().snapshot_into(sc_agg);
 #  endif
 
-    // Phase 11.12 -- decode the packed combined-alloc counter back
-    // into the public `fast_path_allocs` / `slow_path_allocs`
-    // fields so the FullAllocStats wire format is unchanged.
+    // Decode the packed combined-alloc counter back into the public
+    // `fast_path_allocs` / `slow_path_allocs` fields so the
+    // FullAllocStats wire format is unchanged.
     //   total = (packed & PACKED_ALLOCS_TOTAL_MASK)  // cumulative allocs
     //   slow  = (packed >> PACKED_ALLOCS_SLOW_SHIFT) // slow-path calls
     //   fast  = total - slow                         // implied
@@ -170,18 +166,17 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
     out->cross_thread_messages_received = agg.cross_thread_messages_received;
 
 #  ifdef SNMALLOC_STATS_FULL
-    // Phase 9.3 -- copy the per-class arrays into the FFI struct.
+    // Copy the per-class arrays into the FFI struct.
     // `NUM_SMALL_SIZECLASSES` is statically <= the FFI slot count
     // (`SNMALLOC_FULL_STATS_SIZECLASS_SLOTS = 64`); the static
     // assert below makes that contract explicit.  Slots past
     // `NUM_SMALL_SIZECLASSES` stay zero (left clear by the
     // `memset` at the top of this function).
     //
-    // Phase 11.6 -- in BASIC builds these arrays are left at zero
-    // (per the `memset` above), preserving the FFI wire format so
-    // existing consumers parsing `total_live_bytes_by_class` etc.
-    // continue to compile and link.  Their values are simply
-    // all-zero in the BASIC tier.
+    // In BASIC builds these arrays are left at zero (per the `memset`
+    // above), preserving the FFI wire format so existing consumers
+    // parsing `total_live_bytes_by_class` etc. continue to compile and
+    // link.  Their values are simply all-zero in the BASIC tier.
     static_assert(
       NUM_SMALL_SIZECLASSES <= SNMALLOC_FULL_STATS_SIZECLASS_SLOTS,
       "Per-class histogram has fewer FFI slots than snmalloc's "
@@ -191,8 +186,8 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
     {
       out->total_live_bytes_by_class[i] = sc_agg.live_bytes[i];
       out->total_live_count_by_class[i] = sc_agg.live_count[i];
-      // Phase 11.5 -- `cumulative_alloc` is no longer maintained
-      // on the hot path; derive it here from the invariant
+      // `cumulative_alloc` is no longer maintained on the hot path;
+      // derive it here from the invariant
       //   cumulative_alloc = live_count + cumulative_dealloc.
       // The per-thread `sc_stats.cumulative_alloc[i]` field is
       // left at zero by every alloc/dealloc; this expression

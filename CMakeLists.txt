@@ -42,7 +42,7 @@ option(SNMALLOC_PROFILE "Build with heap profiling support" OFF)
 # enables `SNMALLOC_STATS_BASIC` (the BASIC counters are a subset of
 # the FULL surface).
 #
-# Tier overhead targets (see docs/heap-profiling-benchmarks.md):
+# Tier overhead targets:
 #   BASIC -- frontend fast/slow path counters + backend
 #            commit/decommit + largebuddy free-chunk histogram.
 #            Target <= 2% overhead vs OFF.  Production default.

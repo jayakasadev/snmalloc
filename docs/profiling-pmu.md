@@ -9,47 +9,41 @@ counters: that work is delegated to the OS-provided profilers
 expose enough metadata about allocations and hint sites that the raw
 samples can be **joined** with allocator state.
 
-> **Forward references.** This document references three companion
-> deliverables. Items marked *(10.1)* depend on the Phase 10.1 in-tree
-> allocation-site lookup API, items marked *(10.2)* depend on the
-> Phase 10.2 branch-hint inventory sidecar, and items marked *(10.4)*
-> depend on the Phase 10.4 `snmalloc-tools` CLI that automates the
-> joins shown here. Each is available once the corresponding phase
-> lands; the manual command sequences below work today against the
-> primitives that already exist.
->
-> Phase 10.4 is now merged: the joins below are automated via the
-> `snmalloc-tools` subcommands listed in the table (`profile-top`,
-> `pmu-join cache-misses`, `pmu-join c2c`, `branch-misses`).  See
-> `snmalloc-tools/README.md` for the live-process limitation that
-> applies to the cache-miss / c2c joiners.
+> **What's in-tree vs external.** This workflow combines three pieces.
+> snmalloc ships an in-tree allocation-site lookup API and a
+> branch-hint inventory sidecar (`branch_hints.json`). The actual PMU
+> sampling is done by external, OS-provided profilers (`perf` on Linux,
+> Instruments on macOS). The `snmalloc-tools` CLI automates the joins
+> shown here via the subcommands listed in the table (`profile-top`,
+> `pmu-join cache-misses`, `pmu-join c2c`, `pmu-join instruments`,
+> `branch-misses`). The manual command sequences below work directly
+> against the in-tree primitives if you prefer to script the joins
+> yourself. See `snmalloc-tools/README.md` for the live-process
+> limitation that applies to the cache-miss / c2c joiners.
 
 ## Overview
 
 | CPU microarch gap | snmalloc in-tree API | External tool | `snmalloc-tools` subcommand |
 | ----------------- | -------------------- | ------------- | --------------------------- |
-| Allocation hot-spots | `HeapProfile::top_sites()` *(10.1)* | none — built in | `snmalloc-tools profile-top` *(10.4)* |
-| Cache-miss attribution (Linux) | `snmalloc::lookup_alloc_site(addr)` *(10.1)* | `perf record -e cache-misses` | `snmalloc-tools pmu-join cache-misses` *(10.4)* |
-| False sharing (Linux) | `snmalloc::lookup_alloc_site(addr)` *(10.1)* | `perf c2c record` | `snmalloc-tools pmu-join c2c` *(10.4)* |
-| Cache-miss attribution (macOS) | `snmalloc::lookup_alloc_site(addr)` *(10.1)* | Instruments (System Trace → Counters) | `snmalloc-tools pmu-join instruments` *(10.4)* |
-| Branch-hint miss rates | `branch_hints.json` *(10.2)* | `perf record -e branch-misses` | `snmalloc-tools branch-misses` *(10.4)* |
+| Allocation hot-spots | `HeapProfile::top_sites()` | none — built in | `snmalloc-tools profile-top` |
+| Cache-miss attribution (Linux) | `snmalloc::lookup_alloc_site(addr)` | `perf record -e cache-misses` | `snmalloc-tools pmu-join cache-misses` |
+| False sharing (Linux) | `snmalloc::lookup_alloc_site(addr)` | `perf c2c record` | `snmalloc-tools pmu-join c2c` |
+| Cache-miss attribution (macOS) | `snmalloc::lookup_alloc_site(addr)` | Instruments (System Trace → Counters) | `snmalloc-tools pmu-join instruments` |
+| Branch-hint miss rates | `branch_hints.json` | `perf record -e branch-misses` | `snmalloc-tools branch-misses` |
 
 The remainder of this document is one recipe per row.
 
 ## 1. Allocation hot-spots
 
 This is the only one of the four gaps that snmalloc answers entirely
-in-tree: the statistical heap profiler shipped in Phase 7 already
-records per-allocation call stacks (see the
+in-tree: the statistical heap profiler records per-allocation call
+stacks (see the
 [Heap Profiling](../README.md#heap-profiling) section of the project
-README and `docs/heap-profiling-benchmarks.md`). Phase 10.1 adds a
-`top_sites()` convenience method on top of the existing
-`HeapProfile` snapshot type that bucket-sorts samples by their leaf
+README). The `top_sites()` convenience method on the
+`HeapProfile` snapshot type bucket-sorts samples by their leaf
 frame and returns the heaviest call sites by bytes requested.
 
-> Available once Phase 10.1 lands.
-
-### Rust example *(10.1)*
+### Rust example
 
 ```rust
 use snmalloc_rs::SnMalloc;
@@ -86,13 +80,13 @@ fn main() {
 The numeric columns are unbiased Poisson estimators of total bytes
 requested through that leaf, scaled across the entire snapshot.
 
-**Automated via `snmalloc-tools profile-top` — see Phase 10.4.**
+**Automated via `snmalloc-tools profile-top`.**
 
 ## 2. Cache-miss attribution (Linux)
 
 `perf` samples the hardware cache-miss counter and records the
 instruction pointer + call stack at each sample. snmalloc's
-contribution is `lookup_alloc_site(addr)` *(10.1)*, which takes a data
+contribution is `lookup_alloc_site(addr)`, which takes a data
 address (typically the one that missed the cache, recovered from the
 sample's PEBS / IBS load-latency record) and returns the call site
 that allocated the chunk containing it.
@@ -114,12 +108,12 @@ perf script > samples.txt
 address (if the PMU event supports it — `mem_load_*` events do, raw
 `cache-misses` may not), the instruction pointer, and the stack.
 
-### Join with snmalloc *(10.1)*
+### Join with snmalloc
 
 For each sample whose data address falls within an snmalloc-managed
 region, call `snmalloc::lookup_alloc_site(addr)` from a small C++
-harness (or, via the Rust crate, the safe wrapper exposed in
-Phase 10.1) to recover the allocation call stack. Pair the
+harness (or, via the Rust crate, the safe wrapper) to recover the
+allocation call stack. Pair the
 instruction-pointer stack (the *consumer* — who was reading the
 memory when it missed) with the allocation-site stack (the *producer*
 — who allocated the missing line) to localize the layout problem.
@@ -127,10 +121,10 @@ memory when it missed) with the allocation-site stack (the *producer*
 For raw `cache-misses` samples that don't carry a data address,
 manually grep `samples.txt` for IPs known to live in your hot path,
 then look up the *first argument* (the pointer being touched) from
-the surrounding stack. The Phase 10.4 joiner automates the data-addr
-case and falls back to IP-only attribution otherwise.
+the surrounding stack. The joiner automates the data-addr case and
+falls back to IP-only attribution otherwise.
 
-**Automated via `snmalloc-tools pmu-join cache-misses` — see Phase 10.4.**
+**Automated via `snmalloc-tools pmu-join cache-misses`.**
 
 ## 3. False-sharing detection (Linux)
 
@@ -152,7 +146,7 @@ The report's "Shared Data Cache Line Table" lists each contended line
 with its physical / virtual address, the offsets within the line that
 were accessed, and the producing / consuming code locations.
 
-### Join with snmalloc *(10.1)*
+### Join with snmalloc
 
 For each contended line, pass its virtual address to
 `snmalloc::lookup_alloc_site(addr)`. Because `lookup_alloc_site`
@@ -165,7 +159,7 @@ placed the two contended fields on the same line. Common results:
 - Two array elements from a shared-mutable container collide → align
   the allocation to a cache line.
 
-**Automated via `snmalloc-tools pmu-join c2c` — see Phase 10.4.**
+**Automated via `snmalloc-tools pmu-join c2c`.**
 
 ## 4. Cache-miss attribution (macOS)
 
@@ -184,10 +178,10 @@ supported, no-root path is **Instruments**.
 4. Attach to your process and record.
 5. **File → Export…** the trace as XML / `.trace` package.
 
-### Join with snmalloc *(10.1, 10.4)*
+### Join with snmalloc
 
-Feed the exported trace to `snmalloc-tools pmu-join instruments`
-*(10.4)*. The tool walks the Counters samples, extracts data
+Feed the exported trace to `snmalloc-tools pmu-join instruments`.
+The tool walks the Counters samples, extracts data
 addresses (when present) and IP stacks, and joins them against
 `lookup_alloc_site` exactly as on Linux.
 
@@ -203,15 +197,15 @@ addresses (when present) and IP stacks, and joins them against
 - Instruments traces are large; prefer short capture windows
   (10–30s) over long recordings.
 
-**Automated via `snmalloc-tools pmu-join instruments` — see Phase 10.4.**
+**Automated via `snmalloc-tools pmu-join instruments`.**
 
 ## 5. Branch-hint miss rates
 
 snmalloc's hot path is annotated with `SNMALLOC_LIKELY` /
 `SNMALLOC_UNLIKELY` macros. A stale hint — one whose actual
 probability has drifted from the source-code assumption — costs a
-mispredicted branch on every hot-path invocation. Phase 10.2 emits a
-`branch_hints.json` sidecar at build time that enumerates every hint
+mispredicted branch on every hot-path invocation. The build emits a
+`branch_hints.json` sidecar that enumerates every hint
 site with its source location and predicted direction; joining that
 inventory with `perf record -e branch-misses` reveals stale hints.
 
@@ -229,7 +223,7 @@ perf report --stdio --no-children --symbol-filter='snmalloc' \
     > snmalloc-branch-misses.txt
 ```
 
-### Join with `branch_hints.json` *(10.2)*
+### Join with `branch_hints.json`
 
 The sidecar's schema is one entry per hint:
 
@@ -248,7 +242,7 @@ match against `branch_hints.json`. A hint site whose miss rate
 exceeds ~5% is a candidate for inversion (swap `LIKELY` ↔
 `UNLIKELY`) or removal.
 
-**Automated via `snmalloc-tools branch-misses` — see Phase 10.4.**
+**Automated via `snmalloc-tools branch-misses`.**
 
 ## What snmalloc does NOT do
 

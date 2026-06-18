@@ -1,7 +1,7 @@
 #define SNMALLOC_NAME_MANGLE(a) sn_##a
 
 // ---------------------------------------------------------------------------
-// Profile-enabled Config wiring (Phase 4.2).
+// Profile-enabled Config wiring.
 //
 // When SNMALLOC_PROFILE is defined, we must replace the default
 // `snmalloc::Config` (which uses NoClientMetaDataProvider) with a profile-
@@ -21,10 +21,9 @@
 //   3. Pull in `snmalloc.h` (and, on the libc-API path, `malloc.cc` which
 //      transitively includes `snmalloc.h` via `override.h`).
 //
-// When SNMALLOC_PROFILE is undefined this branch is skipped entirely and
-// the shim is byte-identical to its pre-Phase-4.2 form: the default Config
-// is used and the FFI hooks below collapse to the no-op stubs in the
-// `#else` arm.
+// When SNMALLOC_PROFILE is undefined this branch is skipped entirely: the
+// default Config is used and the FFI hooks below collapse to the no-op
+// stubs in the `#else` arm.
 // ---------------------------------------------------------------------------
 #ifdef SNMALLOC_PROFILE
 #  include <atomic>
@@ -130,7 +129,7 @@ SNMALLOC_NAME_MANGLE(rust_usable_size)(const void* ptr)
 }
 
 // ---------------------------------------------------------------------------
-// Heap profiling C ABI surface (Phase 4.0).
+// Heap profiling C ABI surface.
 //
 // These symbols are always present so the Rust FFI is linkable regardless of
 // the C++ build's SNMALLOC_PROFILE setting.  When SNMALLOC_PROFILE is OFF,
@@ -140,7 +139,7 @@ SNMALLOC_NAME_MANGLE(rust_usable_size)(const void* ptr)
 // independent so a `profiling`-enabled crate can link a non-profiling C++
 // build and simply observe `supported() == false`.
 //
-// When SNMALLOC_PROFILE is ON, the bodies delegate to the Phase 2 / Phase 3
+// When SNMALLOC_PROFILE is ON, the bodies delegate to the existing profile
 // machinery: snmalloc::profile::Sampler for the sampling-rate controls and
 // snmalloc::profile::SamplerGlobals::list() for snapshots.  No new C++
 // machinery is introduced here.
@@ -277,7 +276,7 @@ extern "C" SNMALLOC_EXPORT void sn_rust_profile_snapshot_end(void* handle)
 }
 
 // ---------------------------------------------------------------------------
-// Streaming-mode FFI (Phase 5.1).
+// Streaming-mode FFI.
 //
 // We expose a single registered C callback that receives one event per
 // sampled allocation, mirroring tcmalloc's MallocExtension::SetSampleHandler.
@@ -393,7 +392,7 @@ extern "C" SNMALLOC_EXPORT int sn_rust_profile_streaming_stop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Address -> alloc-site reverse lookup (Phase 10.1B).
+// Address -> alloc-site reverse lookup.
 //
 // Given a heap address `addr` (e.g. one harvested from a Linux perf PMU
 // cycle/cache-miss sample), copy the frames of the originating sampled
@@ -444,10 +443,10 @@ extern "C" SNMALLOC_EXPORT intptr_t sn_rust_profile_lookup_alloc_site(
 }
 
 // ---------------------------------------------------------------------------
-// Allocation-lifetime histogram (Phase 9.5).
+// Allocation-lifetime histogram.
 //
 // Read-side accessor for the `snmalloc::profile::LifetimeHistogram`
-// singleton populated by `clear_profile_slot` on every cleanly-freed
+// singleton populated on the dealloc path of every cleanly-freed
 // sampled allocation.  Mirrors the per-bucket counts into the caller's
 // buffer; truncates if `len` is shorter than `kLifetimeBuckets`.  Pure
 // read -- no allocator state is mutated; relaxed loads on each bucket.
