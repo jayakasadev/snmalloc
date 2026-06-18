@@ -23,10 +23,9 @@
 #include "subrange.h"
 
 #ifdef SNMALLOC_PROFILE
-// Pull in the H1/A1 hook bodies once commonconfig.h's
-// LazyArrayClientMetaDataProvider is visible.  Forward-declared in
-// mem/corealloc.h; defined here so any TU that goes through
-// snmalloc_core.h sees the full template definition at instantiation
-// time.
+// Pull in the profiler hook bodies once commonconfig.h's
+// LazyArrayClientMetaDataProvider is visible.  The entry points are declared
+// in profile/hooks.h; their template definitions live here so any TU that
+// goes through snmalloc_core.h sees them at instantiation time.
 #  include "../profile/record.h"
 #endif

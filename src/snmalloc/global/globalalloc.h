@@ -4,10 +4,9 @@
 #include "threadalloc.h"
 
 #ifdef SNMALLOC_PROFILE
-// A1 alloc-side hook lives in profile/record.h.  Already pulled in via
-// backend_helpers.h, but we re-include here so that any TU that
-// instantiates one of the wrappers below picks up the template
-// definition at the point of use.
+// The alloc-side hook bodies live in profile/record.h.  Already pulled in via
+// backend_helpers.h, but re-included here so any TU that instantiates one of
+// the wrappers below picks up the template definition at the point of use.
 #  include "../profile/record.h"
 #endif
 
@@ -349,24 +348,13 @@ namespace snmalloc
     {
       p = ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(sz);
     }
-#ifdef SNMALLOC_PROFILE
-    // A1 heap-profile hook (Phase 3.3).
-    //
-    // This is the alloc-side counterpart to the H1 dealloc hook in
-    // corealloc.h.  All variable-size and compile-time-size public alloc
-    // entry points -- malloc/calloc/realloc, operator new, jemalloc and
-    // Rust shims, BSD valloc/pvalloc, NetBSD reallocarr -- funnel through
-    // the three wrappers in this file (alloc, alloc(smallsizeclass_t),
-    // alloc_aligned), so one hook per wrapper covers them all.
-    //
-    // Runs AFTER the inner alloc so we have a real pointer to install
-    // into the per-object profile slot, and so the pagemap's sizeclass
-    // entry is up to date when the hook walks it.
-    //
-    // Compiles to a no-op when the default Config (NoClientMetaDataProvider)
-    // is selected; only profile-enabled configs pay the fast-path tick.
-    profile::record_alloc<Config>(p, sz, sz);
-#endif
+    // Alloc chokepoint hook: the alloc-side counterpart to the H1 dealloc
+    // waist.  All public alloc entry points (malloc/calloc/realloc, operator
+    // new, jemalloc and Rust shims, BSD valloc/pvalloc, ...) funnel through
+    // the three wrappers in this file, so one hook per wrapper covers them
+    // all.  Runs after the inner alloc so the pointer is real and the pagemap
+    // sizeclass is current.  No-op when profiling is disabled.
+    profile::on_alloc<Config>(p, sz, sz);
     return p;
   }
 
@@ -375,9 +363,7 @@ namespace snmalloc
   {
     const size_t sz = aligned_size(align, size);
     void* p = ThreadAlloc::get().alloc<Conts, ThreadAlloc::CheckInit>(sz);
-#ifdef SNMALLOC_PROFILE
-    profile::record_alloc<Config>(p, size, sz);
-#endif
+    profile::on_alloc<Config>(p, size, sz);
     return p;
   }
 
@@ -390,10 +376,8 @@ namespace snmalloc
   {
     void* p = ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(
       sizeclass);
-#ifdef SNMALLOC_PROFILE
     const size_t sz = sizeclass_to_size(sizeclass);
-    profile::record_alloc<Config>(p, sz, sz);
-#endif
+    profile::on_alloc<Config>(p, sz, sz);
     return p;
   }
 
@@ -402,9 +386,7 @@ namespace snmalloc
   {
     const size_t sz = aligned_size(align, size);
     void* p = ThreadAlloc::get().alloc<Conts, ThreadAlloc::CheckInit>(sz);
-#ifdef SNMALLOC_PROFILE
-    profile::record_alloc<Config>(p, size, sz);
-#endif
+    profile::on_alloc<Config>(p, size, sz);
     return p;
   }
 
