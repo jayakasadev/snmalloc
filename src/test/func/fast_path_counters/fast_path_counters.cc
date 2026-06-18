@@ -66,7 +66,7 @@ namespace
     for (AllocT* a = AllocPool<Alloc::Config>::iterate(); a != nullptr;
          a = AllocPool<Alloc::Config>::iterate(a))
     {
-      agg.accumulate(a->stats);
+      agg.accumulate(a->alloc_stats.frontend);
     }
     frontend_stats_global().snapshot_into(agg);
     return agg;

@@ -687,4 +687,23 @@ namespace snmalloc::profile
       AllocationSampleList::global().broadcast(resize_event);
     }
   }
+
+#ifdef SNMALLOC_PROFILE
+  // Build-gated dealloc entry points the allocator calls (declared in
+  // profile/hooks.h).  They forward to the config-self-disabling
+  // implementations above.  Defined only under SNMALLOC_PROFILE; the
+  // flag-off no-ops live in profile/hooks.h so non-profile builds do not pull
+  // in this header.
+  template<typename Config>
+  SNMALLOC_FAST_PATH_INLINE void on_dealloc(void* p) noexcept
+  {
+    record_dealloc<Config>(p);
+  }
+
+  template<typename Config>
+  SNMALLOC_FAST_PATH_INLINE bool on_dealloc_peek(void* p) noexcept
+  {
+    return record_dealloc_peek<Config>(p);
+  }
+#endif
 } // namespace snmalloc::profile

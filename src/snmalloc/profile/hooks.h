@@ -3,37 +3,39 @@
 // Heap-profiler dealloc hook entry points, declared unconditionally so the
 // allocator can call them by name without an `#ifdef` at the call site.
 //
-// When SNMALLOC_PROFILE is on, these are forward declarations; the real,
-// re-entrancy-guarded definitions live in profile/record.h (pulled in by
-// backend_helpers.h, which is the point of template instantiation).  When
-// SNMALLOC_PROFILE is off, they are empty inline no-ops, so the allocator's
-// unconditional calls compile to nothing.
+// These are thin wrappers over `profile::record_dealloc` /
+// `record_dealloc_peek` (defined in profile/record.h).  When SNMALLOC_PROFILE
+// is on they are declared here and defined in record.h (the point of template
+// instantiation); when off they are empty inline no-ops, so the allocator's
+// unconditional calls compile to nothing and the profile subsystem headers are
+// not pulled in.
+//
+// A distinct name from `record_dealloc` is deliberate: `record_dealloc` is
+// always defined in record.h (self-disabling per config so the profiler tests
+// can call it directly in any build), whereas `on_dealloc` is the build-gated
+// entry the allocator uses.
 
 #include "../ds_core/defines.h"
 
 namespace snmalloc::profile
 {
 #ifdef SNMALLOC_PROFILE
-  /// H1/H2/H3/H4 hook: clear any per-object profile slot for `p` and detach it
-  /// from the live-sample list.  Defined in profile/record.h.
+  /// Defined in profile/record.h; forwards to `record_dealloc`.
   template<typename Config>
-  SNMALLOC_FAST_PATH_INLINE void record_dealloc(void* p) noexcept;
+  SNMALLOC_FAST_PATH_INLINE void on_dealloc(void* p) noexcept;
 
-  /// Peek-only fast path for the H1 site: probe the slab-metadata profile slot
-  /// inline and report whether the dealloc is done (no sample to clear).
-  /// Returns false to fall through to the full `record_dealloc`.  Defined in
-  /// profile/record.h.
+  /// Defined in profile/record.h; forwards to `record_dealloc_peek`.
   template<typename Config>
-  SNMALLOC_FAST_PATH_INLINE bool record_dealloc_peek(void* p) noexcept;
+  SNMALLOC_FAST_PATH_INLINE bool on_dealloc_peek(void* p) noexcept;
 #else
   template<typename Config>
-  SNMALLOC_FAST_PATH_INLINE void record_dealloc(void* p) noexcept
+  SNMALLOC_FAST_PATH_INLINE void on_dealloc(void* p) noexcept
   {
     UNUSED(p);
   }
 
   template<typename Config>
-  SNMALLOC_FAST_PATH_INLINE bool record_dealloc_peek(void* p) noexcept
+  SNMALLOC_FAST_PATH_INLINE bool on_dealloc_peek(void* p) noexcept
   {
     UNUSED(p);
     return false;
