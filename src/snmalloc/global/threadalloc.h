@@ -219,7 +219,8 @@ namespace snmalloc
 #    if __has_attribute(destructor)
     [[gnu::destructor]]
 #    endif
-    static void pthread_cleanup_main_thread()
+    static void
+    pthread_cleanup_main_thread()
     {
       ThreadAlloc::teardown();
     }

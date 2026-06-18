@@ -273,9 +273,9 @@ namespace snmalloc
    * Each `on_*` method is the single point where the corresponding counters
    * are mutated; the allocator calls them by name and never touches the
    * counter fields directly.  When neither stats tier is enabled this is an
-   * empty struct with empty (inlined-away) methods, so an `[[no_unique_address]]`
-   * `AllocStats` member costs zero bytes and the hot-path calls compile to
-   * nothing.
+   * empty struct with empty (inlined-away) methods, so an
+   * `[[no_unique_address]]` `AllocStats` member costs zero bytes and the
+   * hot-path calls compile to nothing.
    */
   struct AllocStats
   {
@@ -323,8 +323,8 @@ namespace snmalloc
     /// future fast-path allocs).  One packed store credits both the cumulative
     /// total and the slow-path call count; `fast_path_deallocs` is pre-credited
     /// symmetrically.
-    SNMALLOC_FAST_PATH_INLINE void
-    on_small_refill(smallsizeclass_t sizeclass_idx, uint16_t refill_count) noexcept
+    SNMALLOC_FAST_PATH_INLINE void on_small_refill(
+      smallsizeclass_t sizeclass_idx, uint16_t refill_count) noexcept
     {
 #ifdef SNMALLOC_STATS_BASIC
       frontend.packed_allocs += static_cast<uint64_t>(refill_count) +
@@ -343,7 +343,8 @@ namespace snmalloc
 
     /// Local-owner dealloc fast path: the freed object's slab is owned by this
     /// thread, so both the cumulative-free and live counters move here.
-    SNMALLOC_FAST_PATH_INLINE void on_local_dealloc(sizeclass_t sc_full) noexcept
+    SNMALLOC_FAST_PATH_INLINE void
+    on_local_dealloc(sizeclass_t sc_full) noexcept
     {
 #ifdef SNMALLOC_STATS_FULL
       // Only small sizeclasses are tracked in the histogram.  live_count /
@@ -366,7 +367,8 @@ namespace snmalloc
     /// so it is routed through this thread's remote dealloc cache.  The
     /// cumulative-free count is credited on this (freeing) thread; the paired
     /// live decrement happens on the owning thread in `on_remote_ingest`.
-    SNMALLOC_FAST_PATH_INLINE void on_remote_dealloc(sizeclass_t sc_full) noexcept
+    SNMALLOC_FAST_PATH_INLINE void
+    on_remote_dealloc(sizeclass_t sc_full) noexcept
     {
 #ifdef SNMALLOC_STATS_BASIC
       frontend.remote_deallocs++;
