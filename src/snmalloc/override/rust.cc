@@ -96,13 +96,12 @@ extern "C" SNMALLOC_EXPORT void* SNMALLOC_NAME_MANGLE(rust_realloc)(
     size_to_sizeclass_full(aligned_new_size).raw())
   {
 #ifdef SNMALLOC_PROFILE
-    // In-place realloc fast path (ticket 86aj0hk9y).  Same intent as
-    // the hook in src/snmalloc/global/libc.h's realloc -- broadcast a
-    // Resize event for any allocation that was originally sampled,
-    // and update the persisted slot's sizes in place.  Out-of-place
-    // realloc (the slow path below) does NOT need a hook: the
-    // alloc()/dealloc() calls already fire record_alloc / record_dealloc
-    // for the new and old pointers respectively.
+    // In-place realloc fast path.  Same intent as the hook in
+    // src/snmalloc/global/libc.h's realloc -- broadcast a Resize event for any
+    // allocation that was originally sampled, and update the persisted slot's
+    // sizes in place.  Out-of-place realloc (the slow path below) does not need
+    // a hook: the alloc()/dealloc() calls already fire the right events for the
+    // new and old pointers respectively.
     snmalloc::profile::record_realloc<snmalloc::Config>(
       ptr, new_size, aligned_new_size);
 #endif

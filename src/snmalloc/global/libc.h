@@ -112,20 +112,14 @@ namespace snmalloc::libc
     // Keep the current allocation if the given size is in the same sizeclass.
     if (sz == round_size(size))
     {
-#ifdef SNMALLOC_PROFILE
       // In-place realloc fast path: the same pointer is returned with a
-      // different requested size that happens to land in the same
-      // sizeclass.  If this allocation was sampled at alloc-time, update
-      // the persisted slot and broadcast a Resize event to streaming
-      // consumers.  Unsampled allocations short-circuit cheaply inside
-      // `record_realloc`.  See ticket 86aj0hk9y.
-      //
-      // Out-of-place realloc (the path below) is intentionally NOT
-      // hooked: it is logically an alloc + memcpy + dealloc, and the
-      // alloc/dealloc hooks already produce the correct stream of
-      // events for it.
-      snmalloc::profile::record_realloc<snmalloc::Config>(ptr, size, sz);
-#endif
+      // different requested size that lands in the same sizeclass.  If this
+      // allocation was sampled at alloc time, update the persisted slot and
+      // broadcast a Resize event; unsampled allocations short-circuit cheaply.
+      // Out-of-place realloc (the path below) is intentionally not hooked: it
+      // is logically alloc + memcpy + dealloc, and those hooks already produce
+      // the correct event stream.  No-op when profiling is disabled.
+      snmalloc::profile::on_realloc<snmalloc::Config>(ptr, size, sz);
       return ptr;
     }
 
