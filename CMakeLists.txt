@@ -45,6 +45,14 @@ option(SNMALLOC_ENABLE_GWP_ASAN_INTEGRATION "Enable GwpAsan as a secondary alloc
 set(SNMALLOC_GWP_ASAN_INCLUDE_PATH "" CACHE PATH "GwpAsan header directory")
 set(SNMALLOC_GWP_ASAN_LIBRARY_PATH "" CACHE PATH "GwpAsan library directory")
 
+# Profile-guided optimization plumbing.  Including this defines the
+# SNMALLOC_PROFILE_PGO option (off / generate / use) and, when enabled,
+# appends the -fprofile-{generate,use} flags via add_compile_options /
+# add_link_options so every target built afterwards inherits them.  See
+# cmake/snmalloc_pgo.cmake and scripts/run-pgo-build.sh for the two-stage
+# workflow.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/snmalloc_pgo.cmake)
+
 if (NOT SNMALLOC_HEADER_ONLY_LIBRARY)
   # Pick a sensible default for the thread cleanup mechanism
   if (${CMAKE_SYSTEM_NAME} STREQUAL FreeBSD)
