@@ -198,9 +198,13 @@ namespace snmalloc
    */
   struct alignas(CACHELINE_SIZE) SizeClassStats
   {
-    /// Live byte total per small sizeclass on this thread.
+    /// Live byte total per small sizeclass.  Not maintained on the hot path;
+    /// derived at snapshot time from `live_count[sc] * sizeclass_to_size(sc)`
+    /// (every object in a small sizeclass has the same size).  Retained for
+    /// output-layout stability; left at zero by the producer paths.
     uint64_t live_bytes[NUM_SMALL_SIZECLASSES] = {};
-    /// Live object count per small sizeclass on this thread.
+    /// Live object count per small sizeclass on this thread.  The only
+    /// per-class quantity maintained on the alloc/dealloc hot path.
     uint64_t live_count[NUM_SMALL_SIZECLASSES] = {};
     /// Derived at snapshot time (see struct doc); left at zero by producers.
     uint64_t cumulative_alloc[NUM_SMALL_SIZECLASSES] = {};
@@ -312,7 +316,6 @@ namespace snmalloc
     {
 #ifdef SNMALLOC_STATS_FULL
       sizeclass.live_count[sizeclass_idx]++;
-      sizeclass.live_bytes[sizeclass_idx] += sizeclass_to_size(sizeclass_idx);
 #else
       UNUSED(sizeclass_idx);
 #endif
@@ -332,7 +335,6 @@ namespace snmalloc
       frontend.fast_path_deallocs += refill_count;
 #  ifdef SNMALLOC_STATS_FULL
       sizeclass.live_count[sizeclass_idx]++;
-      sizeclass.live_bytes[sizeclass_idx] += sizeclass_to_size(sizeclass_idx);
 #  else
       UNUSED(sizeclass_idx);
 #  endif
@@ -347,16 +349,15 @@ namespace snmalloc
     on_local_dealloc(sizeclass_t sc_full) noexcept
     {
 #ifdef SNMALLOC_STATS_FULL
-      // Only small sizeclasses are tracked in the histogram.  live_count /
-      // live_bytes cannot underflow: every local-fast-path dealloc pairs with
-      // a prior alloc on this same per-thread block (cross-thread frees take
-      // the remote path below).
+      // Only small sizeclasses are tracked in the histogram.  live_count
+      // cannot underflow: every local-fast-path dealloc pairs with a prior
+      // alloc on this same per-thread block (cross-thread frees take the
+      // remote path below).
       if (sc_full.is_small())
       {
         smallsizeclass_t sc = sc_full.as_small();
         sizeclass.cumulative_dealloc[sc]++;
         sizeclass.live_count[sc]--;
-        sizeclass.live_bytes[sc] -= sizeclass_to_size(sc);
       }
 #else
       UNUSED(sc_full);
@@ -400,7 +401,6 @@ namespace snmalloc
         size_t objsize = sizeclass_full_to_size(sc_full);
         size_t length = delta_bytes / objsize;
         sizeclass.live_count[sc] -= length;
-        sizeclass.live_bytes[sc] -= delta_bytes;
       }
 #else
       UNUSED(sc_full, delta_bytes);

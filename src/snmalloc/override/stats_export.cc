@@ -184,7 +184,13 @@ snmalloc_get_full_stats(struct snmalloc_full_stats* out)
       "to keep the FullAllocStats wire format wide enough.");
     for (size_t i = 0; i < NUM_SMALL_SIZECLASSES; i++)
     {
-      out->total_live_bytes_by_class[i] = sc_agg.live_bytes[i];
+      // `total_live_bytes` is no longer maintained on the hot path; derive it
+      // from `live_count * sizeclass_to_size` -- every object in a small
+      // sizeclass has the same size, so the product is exact.  Removing the
+      // per-alloc `live_bytes` store halves the FULL-tier per-class hot-path
+      // cost (one store instead of two).
+      out->total_live_bytes_by_class[i] = sc_agg.live_count[i] *
+        sizeclass_to_size(static_cast<smallsizeclass_t>(i));
       out->total_live_count_by_class[i] = sc_agg.live_count[i];
       // `cumulative_alloc` is no longer maintained on the hot path;
       // derive it here from the invariant
