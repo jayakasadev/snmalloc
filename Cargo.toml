@@ -4,7 +4,6 @@ members = [
     "snmalloc-rs",
     "snmalloc-rs/snmalloc-sys",
     "snmalloc-rs/xtask",
-    "snmalloc-tools",
 ]
 
 [profile.release]
