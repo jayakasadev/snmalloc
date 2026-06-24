@@ -22,7 +22,6 @@ _COMMON_COPTS = [
 cc_library(
     name = "snmalloc_hdrs",
     hdrs = glob(["src/snmalloc/**/*.h"]),
-    defines = _COMMON_DEFINES,
     strip_include_prefix = "src",
     visibility = ["//visibility:public"],
 )
@@ -36,7 +35,7 @@ _ALLOC_SHIM_SRCS = [
 ]
 
 # Bazel-native allocator shim. Mirrors CMake's snmallocshim-static archive
-# without requiring rules_foreign_cc or a CMake install tree.
+# without requiring CMake or an install tree.
 cc_library(
     name = "snmalloc",
     srcs = _ALLOC_SHIM_SRCS,
@@ -56,7 +55,7 @@ _RUST_SHIM_SRCS = [
 ]
 
 # Bazel-native Rust shim archive. Mirrors CMake's snmallocshim-rust source
-# set without requiring rules_foreign_cc or a CMake install tree.
+# set without requiring CMake or an install tree.
 cc_library(
     name = "snmalloc-rs",
     srcs = _RUST_SHIM_SRCS,

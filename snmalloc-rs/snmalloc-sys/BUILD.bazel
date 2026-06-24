@@ -7,8 +7,8 @@
 #   :snmalloc_sys_profiling Links against the SNMALLOC_PROFILE=ON archive
 #                           and enables the `profiling` crate feature.
 #
-# The C archive itself is produced by the rules_foreign_cc `cmake`
-# rules in the root `BUILD.bazel`.
+# The C archive itself is produced by the Bazel-native `cc_library`
+# shim targets in the root `BUILD.bazel`.
 
 load("@rules_rust//rust:defs.bzl", "rust_library")
 
