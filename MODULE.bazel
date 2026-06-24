@@ -1,7 +1,6 @@
 module(name = "snmalloc")
 
 bazel_dep(name = "rules_cc", version = "0.2.19")
-bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 # Test-only deps. Marked dev so downstream consumers (e.g. workspaces that
 # depend on @snmalloc//snmalloc-rs:snmalloc_rs) don't transitively pull
 # fuzztest/googletest + the older rules_go they drag in.
@@ -14,9 +13,9 @@ bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
 # rules_rust gives us `rust_library` / `rust_test`. The snmalloc-sys crate's
 # hand-written `extern "C"` decls in `snmalloc-rs/snmalloc-sys/src/lib.rs`
 # are consumed verbatim; the C archive comes from the root `BUILD.bazel`
-# `cmake(name = "snmalloc-rs", ...)` rules in rules_foreign_cc. No bindgen
-# step is involved — the FFI surface is small and stable, and skipping
-# bindgen removes the libclang / LLVM source-tree transitive dependency.
+# Bazel-native `cc_library` shim targets. No bindgen step is involved — the
+# FFI surface is small and stable, and skipping bindgen removes the libclang /
+# LLVM source-tree transitive dependency.
 # -----------------------------------------------------------------------------
 bazel_dep(name = "rules_rust", version = "0.70.0")
 
