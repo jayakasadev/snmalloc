@@ -1,10 +1,16 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
+# NB: SNMALLOC_STATS / SNMALLOC_STATS_BASIC are intentionally OFF here to match
+# the CMake default (all stats tiers default OFF). Forcing BASIC on crashed
+# consumers that use snmalloc as the global allocator: the per-thread
+# AllocStats counters fault in `on_remote_dealloc` during thread teardown
+# (reproduced on Linux/arm64 under Tokio). The heap-profiling path uses
+# SNMALLOC_PROFILE (the Sampler), which is independent of the stats tiers, so
+# leaving stats off does not affect profiling. A consumer that wants the stats
+# counters can add the define on its own target.
 _COMMON_DEFINES = [
     "SNMALLOC_CHECK_LOADS=false",
     "SNMALLOC_PAGEID=false",
-    "SNMALLOC_STATS",
-    "SNMALLOC_STATS_BASIC",
     "SNMALLOC_USE_WAIT_ON_ADDRESS=1",
 ]
 
