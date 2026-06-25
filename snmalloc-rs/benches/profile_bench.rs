@@ -214,6 +214,11 @@ fn bench_small(c: &mut Criterion) {
 fn bench_medium(c: &mut Criterion) {
     let mut group = c.benchmark_group("medium_allocs");
     group.throughput(Throughput::Elements(BATCH as u64));
+    // Ticket 86aj0jg36: bump sample_size 50->200 and measurement_time
+    // 5s->20s for the medium/mixed groups so the Linux-pinned CIs are
+    // tight enough to call a verdict on the <1% idle-overhead claim.
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(20));
     for &v in variants() {
         apply_variant(v);
         group.bench_with_input(BenchmarkId::from_parameter(v.label()), &v, |b, _| {
@@ -226,6 +231,11 @@ fn bench_medium(c: &mut Criterion) {
 fn bench_mixed(c: &mut Criterion) {
     let mut group = c.benchmark_group("mixed");
     group.throughput(Throughput::Elements(BATCH as u64));
+    // Ticket 86aj0jg36: bump sample_size 50->200 and measurement_time
+    // 5s->20s for the medium/mixed groups so the Linux-pinned CIs are
+    // tight enough to call a verdict on the <1% idle-overhead claim.
+    group.sample_size(200);
+    group.measurement_time(Duration::from_secs(20));
     let sizes = mixed_sizes();
     for &v in variants() {
         apply_variant(v);
