@@ -13,6 +13,7 @@
 # yet model).
 
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load(":defs.bzl", "snmalloc_rs_profiling_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -21,6 +22,16 @@ _CRATE_ROOT = "src/lib.rs"
 _CRATE_SRCS = glob(
     ["src/**/*.rs"],
     allow_empty = False,
+)
+
+# Exported so downstream consumers' `snmalloc_rs_profiling_library`
+# instantiations (defs.bzl) can reference this repo's sources via a
+# `Label(...)`-anchored, fully qualified filegroup — see defs.bzl for why a
+# bare glob() in a macro won't do (it would resolve against the CALLER's
+# package instead of this one).
+filegroup(
+    name = "lib_srcs",
+    srcs = _CRATE_SRCS,
 )
 
 # Default (no-profiling) build.
@@ -34,29 +45,26 @@ rust_library(
     ],
 )
 
-# Profiling-enabled build (Cargo feature `profiling`).  Pulls flate2
-# via the root MODULE.bazel `crate_universe` extension (dev-only scope
-# -- downstream consumers register their own flate2).  Raw frame
+# Profiling-enabled build (Cargo feature `profiling`), bound to THIS repo's
+# own `@crates` (dev-only scope, see MODULE.bazel) for this repo's own
+# tests/CI. Downstream consumers cannot depend on this target directly
+# (`@crates` isn't visible to them) — they call `snmalloc_rs_profiling_library`
+# in defs.bzl instead, bound to their own crate universe. Raw frame
 # addresses are emitted as 16-hex-digit pointers; see
 # `:snmalloc_rs_profiling_symbolicated` below for the variant that
 # resolves them into function/file/line via `backtrace`.
-rust_library(
+snmalloc_rs_profiling_library(
     name = "snmalloc_rs_profiling",
-    srcs = _CRATE_SRCS,
     crate_features = ["profiling"],
-    crate_name = "snmalloc_rs",
-    crate_root = _CRATE_ROOT,
-    edition = "2021",
-    deps = [
-        "//snmalloc-rs/snmalloc-sys:snmalloc_sys_profiling",
-        "@crates//:flate2",
-    ],
+    flate2_dep = "@crates//:flate2",
 )
 
 # Profiling + symbolicate build (Cargo features `profiling`,
-# `symbolicate`).  Same C archive as `:snmalloc_rs_profiling` (the
-# symbolicator is purely Rust-side) but additionally pulls in
-# `backtrace` so `HeapProfile::write_flamegraph` and
+# `symbolicate`), bound to THIS repo's own `@crates` — same caveat as
+# `:snmalloc_rs_profiling` above; downstream consumers call
+# `snmalloc_rs_profiling_library` in defs.bzl instead. Same C archive as
+# `:snmalloc_rs_profiling` (the symbolicator is purely Rust-side) but
+# additionally pulls in `backtrace` so `HeapProfile::write_flamegraph` and
 # `HeapProfile::write_pprof_gz` resolve raw frame addresses into
 # function/file/line at dump time.
 #
@@ -73,21 +81,14 @@ rust_library(
 # first use).  If the consumer binary already links those crates for
 # any other reason (panic backtraces, tracing-error, etc.) the
 # incremental cost is near zero.
-rust_library(
+snmalloc_rs_profiling_library(
     name = "snmalloc_rs_profiling_symbolicated",
-    srcs = _CRATE_SRCS,
     crate_features = [
         "profiling",
         "symbolicate",
     ],
-    crate_name = "snmalloc_rs",
-    crate_root = _CRATE_ROOT,
-    edition = "2021",
-    deps = [
-        "//snmalloc-rs/snmalloc-sys:snmalloc_sys_profiling",
-        "@crates//:backtrace",
-        "@crates//:flate2",
-    ],
+    backtrace_dep = "@crates//:backtrace",
+    flate2_dep = "@crates//:flate2",
 )
 
 # Profile-enabled build without the `profiling` Cargo feature (no flate2).
