@@ -45,6 +45,35 @@
 //! With the `symbolicate` feature on, function names resolve via
 //! [`HeapProfile::symbolize`] when available, with the hex fallback
 //! used for any frame the symbol backend can't resolve.
+//!
+//! Offline symbolication and ASLR
+//! -------------------------------
+//!
+//! `Location.address` is corrected for the running process's load
+//! bias (see [`load_bias`]) before it is written out, so the emitted
+//! address is a stable, file-relative offset rather than a raw
+//! runtime pointer.  This matters because ASLR/PIE gives every
+//! process run a different base address for its own executable;
+//! without the correction, an address baked into a `.pb` file would
+//! only mean the right thing to the exact process instance that
+//! produced it, and would resolve to the wrong symbol (or nothing at
+//! all) when a *different* process -- `go tool pprof`, `addr2line`,
+//! `atos`, or a symbol server -- later loads the same on-disk binary
+//! at a different base and tries to interpret the file.
+//!
+//! The correction is unconditional: it applies whether or not the
+//! `symbolicate` feature is enabled, because it matters most exactly
+//! when `symbolicate` is off -- a stripped release binary whose
+//! profile needs later, external resolution has no other way to
+//! recover the right addresses.  It does not touch the in-process
+//! symbol lookup in [`HeapProfile::symbolize`], which resolves
+//! against the raw runtime pointer as `backtrace::resolve` expects.
+//!
+//! No [`Mapping`](https://github.com/google/pprof/blob/main/proto/profile.proto)
+//! message is emitted (`Location.mapping_id` stays `0`), so an
+//! external consumer has no build-id or file-range metadata to
+//! correct the address itself -- the correction has to happen here,
+//! at encode time, or not at all.
 
 extern crate alloc;
 extern crate std;
@@ -58,6 +87,9 @@ use std::io;
 use std::io::Write;
 
 use crate::profile::{BtSample, HeapProfile, Weight};
+
+mod load_bias;
+use load_bias::load_bias;
 
 // =========================================================================
 // Wire-format primitives
@@ -232,6 +264,27 @@ pub(crate) fn write_pprof<W: Write>(
     weight: Weight,
     w: &mut W,
 ) -> io::Result<()> {
+    // The bias cannot change during a process's life (a binary's load
+    // address is fixed at process start), so it is fetched once here
+    // -- via the cached, platform-specific `load_bias()` -- rather
+    // than once per frame inside `write_pprof_with_bias`.
+    write_pprof_with_bias(profile, weight, load_bias(), w)
+}
+
+/// [`write_pprof`], parameterised over the load bias instead of
+/// reading it from the live platform.
+///
+/// Split out purely so tests can inject a synthetic, non-zero bias
+/// and assert on the resulting `Location.address` bytes without
+/// depending on `load_bias()`'s live, platform-dependent value.
+/// [`write_pprof`] is the only real caller; it always passes
+/// `load_bias()`.
+fn write_pprof_with_bias<W: Write>(
+    profile: &HeapProfile,
+    weight: Weight,
+    bias: Option<usize>,
+    w: &mut W,
+) -> io::Result<()> {
     // ---------------------------------------------------------------------
     // Step 1: build the string table, location set, and function set.
     // ---------------------------------------------------------------------
@@ -348,7 +401,14 @@ pub(crate) fn write_pprof<W: Write>(
             // mapping_id: we don't emit a Mapping (which would
             // describe the executable file ranges), so this stays 0.
             write_uint64(&mut loc_buf, 2, 0);
-            write_uint64(&mut loc_buf, 3, addr as u64);
+            // Correct for ASLR/PIE load bias so the emitted address is
+            // a stable, file-relative offset -- see the module-level
+            // "Offline symbolication and ASLR" docs above.  This is
+            // the *only* place the bias is applied: the symbol lookup
+            // a few lines up (`resolved.get(&(frame as *const u8))`)
+            // deliberately keys on the raw, uncorrected `frame`
+            // pointer, matching what `backtrace::resolve` expects.
+            write_uint64(&mut loc_buf, 3, corrected_address(addr, bias));
             // Single nested Line record.
             write_bytes(&mut loc_buf, 4, &line_buf);
             locations_buf.push(loc_buf);
@@ -451,6 +511,23 @@ pub(crate) fn write_pprof<W: Write>(
     write_int64(&mut out, 14, s_alloc_space as i64);
 
     w.write_all(&out)
+}
+
+/// Correct a raw runtime frame address for ASLR/PIE load bias.
+///
+/// Returns `addr - bias` when `bias` is `Some`, unchanged `addr` when
+/// `bias` is `None` (the "couldn't determine bias" case -- see
+/// [`load_bias`]).  Uses `saturating_sub` rather than plain
+/// subtraction so a frame belonging to a mapping based *below* the
+/// main executable (e.g. a dynamically loaded library) degrades to
+/// `0` instead of underflow-panicking; that mirrors the `None` case's
+/// "can't correct, don't crash" contract rather than treating it as
+/// an error.
+fn corrected_address(addr: usize, bias: Option<usize>) -> u64 {
+    match bias {
+        Some(b) => (addr as u64).saturating_sub(b as u64),
+        None => addr as u64,
+    }
 }
 
 // =========================================================================
@@ -761,5 +838,139 @@ mod tests {
         assert_eq!(t.intern(""), 0);
         // First non-empty intern is slot 1.
         assert_eq!(t.intern("alloc_objects"), 1);
+    }
+
+    /// [`corrected_address`] is the pure arithmetic backing the
+    /// bias fix-up; exercised directly so the encoder-level tests
+    /// below only need to check that `write_pprof_with_bias` actually
+    /// calls it, not re-derive its arithmetic.
+    #[test]
+    fn corrected_address_subtracts_bias() {
+        assert_eq!(corrected_address(0x2000, Some(0x1000)), 0x1000);
+        assert_eq!(corrected_address(0x2000, None), 0x2000);
+        // A frame below the bias (e.g. a lower-based library) must
+        // saturate to 0, not underflow-panic.
+        assert_eq!(corrected_address(0x100, Some(0x2000)), 0);
+    }
+
+    /// Decode every `Location.address` (field 3 inside a field-4
+    /// Location message) in a Profile buffer, in encounter order.
+    fn decode_location_addresses(buf: &[u8]) -> Vec<u64> {
+        let mut addrs = Vec::new();
+        let mut i: usize = 0;
+        while i < buf.len() {
+            let (tag, n) = read_varint(&buf[i..]);
+            i += n;
+            let field = (tag >> 3) as u32;
+            let wire = (tag & 0x7) as u32;
+            match (field, wire) {
+                (4, WIRE_TYPE_LEN) => {
+                    let (len, n) = read_varint(&buf[i..]);
+                    i += n;
+                    let end = i + len as usize;
+                    addrs.push(decode_location_address(&buf[i..end]));
+                    i = end;
+                }
+                (_, WIRE_TYPE_LEN) => {
+                    let (len, n) = read_varint(&buf[i..]);
+                    i += n;
+                    i += len as usize;
+                }
+                (_, WIRE_TYPE_VARINT) => {
+                    let (_, n) = read_varint(&buf[i..]);
+                    i += n;
+                }
+                _ => panic!("unsupported wire type {} for field {}", wire, field),
+            }
+        }
+        addrs
+    }
+
+    /// Decode the `address` (field 3) of a single Location message.
+    fn decode_location_address(buf: &[u8]) -> u64 {
+        let mut i: usize = 0;
+        let mut address = 0u64;
+        while i < buf.len() {
+            let (tag, n) = read_varint(&buf[i..]);
+            i += n;
+            let field = (tag >> 3) as u32;
+            let wire = (tag & 0x7) as u32;
+            match (field, wire) {
+                (3, WIRE_TYPE_VARINT) => {
+                    let (v, n) = read_varint(&buf[i..]);
+                    i += n;
+                    address = v;
+                }
+                (_, WIRE_TYPE_LEN) => {
+                    let (len, n) = read_varint(&buf[i..]);
+                    i += n;
+                    i += len as usize;
+                }
+                (_, WIRE_TYPE_VARINT) => {
+                    let (_, n) = read_varint(&buf[i..]);
+                    i += n;
+                }
+                _ => panic!("unsupported wire type {} for field {}", wire, field),
+            }
+        }
+        address
+    }
+
+    /// With a synthetic, non-zero injected bias, every emitted
+    /// `Location.address` must be the bias-*corrected* offset, not
+    /// the raw pointer value captured in `BtSample::stack`.  This is
+    /// the core regression test for the offline-symbolication fix:
+    /// without it, every address here would come back unmodified.
+    #[test]
+    fn write_pprof_with_bias_corrects_location_addresses() {
+        let raw_addrs: [usize; 2] = [0x1_0000_3000, 0x1_0000_4000];
+        let bias: usize = 0x1_0000_0000;
+        let p = HeapProfile::from_samples(vec![BtSample {
+            alloc_ptr: core::ptr::null(),
+            requested_size: 64,
+            allocated_size: 64,
+            weight: 4096,
+            stack: raw_addrs.iter().map(|&a| a as *const u8).collect(),
+        }]);
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_pprof_with_bias(&p, Weight::Allocated, Some(bias), &mut buf).unwrap();
+
+        let mut got = decode_location_addresses(&buf);
+        got.sort_unstable();
+        let mut want: Vec<u64> = raw_addrs.iter().map(|&a| (a - bias) as u64).collect();
+        want.sort_unstable();
+        assert_eq!(got, want, "Location.address must be bias-corrected");
+
+        // The raw, uncorrected addresses must NOT appear as location
+        // addresses -- otherwise the fix silently did nothing.
+        for &raw in &raw_addrs {
+            assert!(
+                !got.contains(&(raw as u64)),
+                "found uncorrected raw address {raw:#x} in output"
+            );
+        }
+    }
+
+    /// With `bias = None` (the "couldn't determine bias" contract --
+    /// what every platform without a bias source, e.g. Windows,
+    /// reports) the encoder must fall back to raw, uncorrected
+    /// addresses rather than panicking or corrupting the output.
+    #[test]
+    fn write_pprof_with_bias_none_emits_raw_addresses() {
+        let raw_addr = 0x1_0000_3000usize;
+        let p = HeapProfile::from_samples(vec![BtSample {
+            alloc_ptr: core::ptr::null(),
+            requested_size: 64,
+            allocated_size: 64,
+            weight: 4096,
+            stack: vec![raw_addr as *const u8],
+        }]);
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_pprof_with_bias(&p, Weight::Allocated, None, &mut buf).unwrap();
+
+        let got = decode_location_addresses(&buf);
+        assert_eq!(got, vec![raw_addr as u64]);
     }
 }
