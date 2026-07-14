@@ -1,7 +1,9 @@
 #pragma once
 
 #include "../ds/ds.h"
+#include "../global/runtime_config.h"
 #include "../mem/mem.h"
+#include "../pal/pal.h"
 #include "buddy.h"
 #include "empty_range.h"
 #include "range_helpers.h"
@@ -482,7 +484,19 @@ namespace snmalloc
           reinterpret_cast<void*>(buddy_large.remove_block(size)));
 
         if (result != nullptr)
+        {
+          // This chunk came from the buddy allocator's own cache/tree
+          // rather than fresh memory from the parent range.  If the
+          // immediate-decay policy is active, the chunk may have been
+          // decommitted while it sat in the buddy cache (see
+          // dealloc_range below), so unconditionally notify the PAL
+          // that we are about to use it again.  This is idempotent and
+          // cheap on POSIX platforms when the chunk was never actually
+          // decommitted.
+          DefaultPal::template notify_using<NoZero>(
+            result.unsafe_ptr(), size);
           return result;
+        }
 
         return refill(size);
       }
@@ -504,6 +518,22 @@ namespace snmalloc
         auto overflow =
           capptr::Arena<void>::unsafe_from(reinterpret_cast<void*>(
             buddy_large.add_block(base.unsafe_uintptr(), size)));
+
+        if (overflow == nullptr && RuntimeConfig::decay_rate_ms() == 0)
+        {
+          // The chunk was absorbed into this buddy allocator's own
+          // cache/tree (it was not consolidated all the way up to a
+          // block big enough to hand back to the parent range).  With
+          // immediate decay requested, return the physical pages to
+          // the OS right away rather than letting them sit here fully
+          // committed indefinitely.  The chunk remains a live,
+          // addressable node in the buddy cache/tree -- its RB-tree
+          // bookkeeping lives in the pagemap metadata entry, not in
+          // the chunk's own memory -- so it is safe to decommit while
+          // still linked in.
+          DefaultPal::notify_not_using(base.unsafe_ptr(), size);
+        }
+
         dealloc_overflow(overflow);
       }
 

@@ -92,8 +92,10 @@ fn decay_rate_roundtrip() {
     SnMalloc::set_decay_rate(200);
     assert_eq!(SnMalloc::decay_rate(), 200);
 
-    // 0 ms is a valid value -- once the backend read-side hook
-    // lands it will mean "decay immediately".
+    // 0 ms is a valid value -- the backend read-side hook now treats
+    // it as "decay immediately" (see `decay_rate_immediate.rs` for
+    // the end-to-end proof); this roundtrip test only pins the
+    // storage/getter contract.
     SnMalloc::set_decay_rate(0);
     assert_eq!(SnMalloc::decay_rate(), 0);
 
