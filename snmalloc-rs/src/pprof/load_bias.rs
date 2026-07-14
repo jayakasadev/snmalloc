@@ -68,6 +68,10 @@ fn platform_load_bias() -> Option<usize> {
 /// Linux load-bias detection via `/proc/self/maps`.
 #[cfg(target_os = "linux")]
 mod linux {
+    // `extern crate std;` at this file's top scope (line 29) doesn't
+    // propagate into this nested inline module -- each module needs
+    // its own path to `std`, same as any other item resolution.
+    use super::std;
     use std::fs;
     use std::io::BufRead;
 
