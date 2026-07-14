@@ -19,31 +19,15 @@
 //!
 //! ## Why this measures `LazyFree`, not `VmRSS`
 //!
-//! On Linux, `notify_not_using` (`src/snmalloc/pal/pal_linux.h`) calls
-//! `madvise(p, size, madvise_free_flags)`, and `madvise_free_flags` is
-//! `MADV_FREE` on any kernel that has it (>= 4.5; snmalloc only falls
-//! back to `MADV_DONTNEED` on older kernels). `MADV_FREE` is a *lazy*
-//! hint: the kernel marks the pages as reclaimable immediately but
-//! does NOT evict them from the process's resident set until either
-//! (a) memory pressure forces reclamation, or (b) the pages are
-//! written to again (triggering a fresh zero-fill). Concretely,
-//! `VmRSS` in `/proc/self/status` does NOT drop right after
-//! `MADV_FREE` -- confirmed experimentally: a 12 MiB `MADV_FREE`
-//! leaves `VmRSS` completely unchanged, while an immediately
-//! following `MADV_DONTNEED` on the same range drops it right away.
-//! Asserting on `VmRSS` here would therefore fail even when the
-//! backend is behaving exactly as designed.
-//!
-//! The actually-correct, immediately-observable signal for
-//! `MADV_FREE` is the `LazyFree:` field of `/proc/self/smaps_rollup`
-//! (also surfaced per-mapping in `/proc/self/smaps`): the kernel
-//! tags `MADV_FREE`d-but-still-resident pages there the instant the
-//! `madvise` call returns. This is what this test asserts grows by
-//! (approximately) the size of our allocation after the free -- that
-//! is the real, kernel-visible proof that snmalloc issued the
-//! immediate-decay `madvise` at all, without waiting on memory
-//! pressure or racing a kernel version's choice of `MADV_FREE` vs
-//! `MADV_DONTNEED`.
+//! See `decay_smaps` (this test's helper module, shared with the
+//! sibling `decay_rate_windowed.rs`) for the full reasoning on why
+//! `MADV_FREE` requires reading `/proc/self/smaps_rollup`'s
+//! `LazyFree:` field rather than `VmRSS`. In short: `MADV_FREE`
+//! (what `notify_not_using` issues on Linux) is a lazy hint that does
+//! not evict pages from the resident set on its own, so `VmRSS` would
+//! not move even when the backend behaves exactly as designed, while
+//! `LazyFree:` is updated the instant the kernel processes the
+//! `madvise` call.
 //!
 //! This test proves that end-to-end from Rust: with the decay rate
 //! set to 0, a large allocation that is freed should have its pages
@@ -79,9 +63,11 @@
 
 #![cfg(target_os = "linux")]
 
+mod decay_smaps;
+
+use decay_smaps::{read_lazyfree_bytes, read_rss_bytes};
 use snmalloc_rs::SnMalloc;
 use std::alloc::{GlobalAlloc, Layout};
-use std::fs;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Serialise every test in this file. `SnMalloc::set_decay_rate` is a
@@ -118,67 +104,26 @@ impl Drop for DecayRateGuard {
     }
 }
 
-/// Read one `kB`-suffixed field out of `/proc/self/smaps_rollup`,
-/// e.g. `field_kb("LazyFree:")` or `field_kb("Rss:")`. Lines look
-/// like:
-///
-/// ```text
-/// LazyFree:              0 kB
-/// ```
-///
-/// `smaps_rollup` aggregates across every mapping in the process, so
-/// this is a single cheap read rather than summing per-VMA entries
-/// out of the (much larger) `/proc/self/smaps`.
-fn read_smaps_rollup_field_kb(field: &str) -> u64 {
-    let text = fs::read_to_string("/proc/self/smaps_rollup")
-        .expect("failed to read /proc/self/smaps_rollup");
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix(field) {
-            return rest
-                .trim()
-                .trim_end_matches("kB")
-                .trim()
-                .parse()
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "failed to parse {field} value from {rest:?}: {e}"
-                    )
-                });
-        }
-    }
-    panic!("{field} line not found in /proc/self/smaps_rollup");
-}
-
-/// Bytes currently tagged `MADV_FREE`-but-still-resident, aggregated
-/// across the whole process.
-fn read_lazyfree_bytes() -> u64 {
-    read_smaps_rollup_field_kb("LazyFree:") * 1024
-}
-
-/// Total resident set size, aggregated across the whole process.
-/// Used only as a monotonicity sanity check here -- see the
-/// module doc for why `LazyFree` (not a `Rss` drop) is the correct
-/// signal for `MADV_FREE`-based immediate decay.
-fn read_rss_bytes() -> u64 {
-    read_smaps_rollup_field_kb("Rss:") * 1024
-}
-
 /// Large-object size, well above snmalloc's small/large sizeclass
-/// boundary (`MAX_SMALL_SIZECLASS_SIZE`, which sits at or below
-/// `MIN_CHUNK_SIZE` == `1 << 14` == 16 KiB on the default build) so
-/// this allocation is guaranteed to route through the backend
-/// `LargeBuddyRange`, not a per-thread small-object slab cache. 12 MiB
-/// gives comfortable margin above that boundary and above the
-/// per-thread local large-object cache cap (`LocalCacheSizeBits` ==
-/// 21 bits == 2 MiB), so the free lands in the *global*
-/// `LargeBuddyRange` (`LargeBuddyRange<GlobalCacheSizeBits,
-/// bits::BITS - 1, ...>` in `src/snmalloc/backend/standard_range.h`)
-/// whose `MAX_SIZE_BITS` is effectively unbounded -- so a lone free
-/// essentially never consolidates all the way up to a block "too big
-/// for this buddy allocator", meaning `add_block` reliably returns
-/// null (chunk absorbed into the buddy's own cache) and the
-/// immediate-decay branch in `dealloc_range` fires.
-const LARGE_ALLOC_SIZE: usize = 12 * 1024 * 1024;
+/// boundary (`MIN_CHUNK_SIZE` == `1 << 14` == 16 KiB on the default
+/// build) so this allocation is guaranteed to route through a backend
+/// `LargeBuddyRange`, not a per-thread small-object slab cache --
+/// but, critically, *below* `LocalCacheSizeBits` (2 MiB,
+/// `src/snmalloc/backend/base_constants.h`), the threshold at which
+/// `LargeObjectRange`'s per-thread `LargeBuddyRange<21, 21, ...>`
+/// (`src/snmalloc/backend/standard_range.h`) bypasses its own
+/// `buddy_large` entirely and forwards straight to `Stats` ->
+/// `CommitRange<PAL>`, which unconditionally decommits on every
+/// `dealloc_range` regardless of `decay_rate_ms()` -- a 12 MiB
+/// allocation (this constant's original value) lands in that bypass
+/// path and would observe the exact same `LazyFree` behaviour with
+/// none of this feature's code compiled in at all, silently testing
+/// nothing. 768 KiB rounds up to a 1 MiB chunk (`bits::next_pow2_bits`),
+/// comfortably under the 2 MiB bypass threshold, so the free actually
+/// reaches `buddy_large.add_block()` on the *per-thread*
+/// `LargeBuddyRange` and exercises the `decay_rate_ms() == 0` branch
+/// in `dealloc_range` this test exists to prove.
+const LARGE_ALLOC_SIZE: usize = 768 * 1024;
 
 /// With `decay_rate_ms() == 0`, freeing a large allocation whose
 /// backend chunk lands in `LargeBuddyRange`'s own cache/tree (rather
@@ -264,8 +209,7 @@ fn decay_rate_zero_marks_pages_lazyfree_after_free() {
     // process-memory noise while still failing hard if immediate
     // decay regresses to "never calls notify_not_using".
     let lazyfree_delta = lazyfree_after.saturating_sub(lazyfree_before);
-    let observed_fraction =
-        lazyfree_delta as f64 / LARGE_ALLOC_SIZE as f64;
+    let observed_fraction = lazyfree_delta as f64 / LARGE_ALLOC_SIZE as f64;
 
     assert!(
         observed_fraction >= 0.60,
