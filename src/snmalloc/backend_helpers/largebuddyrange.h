@@ -7,6 +7,7 @@
 #include "buddy.h"
 #include "empty_range.h"
 #include "range_helpers.h"
+#include "snmalloc/stl/array.h"
 #include "snmalloc/stl/atomic.h"
 
 namespace snmalloc
@@ -155,25 +156,52 @@ namespace snmalloc
       MetaEntryBase::Word::Two, RED_BIT));
     ///@}
 
+    /**
+     * The bit used to mark a cached chunk as having already been
+     * decommitted (`PAL::notify_not_using`'d) by the time-windowed decay
+     * sweep while it sits idle in the buddy allocator's own cache/tree.
+     * Lets the sweep skip a chunk it already decommitted on an earlier
+     * pass without re-issuing `notify_not_using` on it.  Packed into the
+     * same low-bit region as `RED_BIT`, one bit further up -- subject to
+     * the same two constraints (must not collide with a valid chunk
+     * address bit, must be one of the bits the meta entry's back-end
+     * word actually allows us to use).
+     * @{
+     */
+    static constexpr address_t DECOMMITTED_BIT = 1 << 9;
+
+    static_assert(DECOMMITTED_BIT < MIN_CHUNK_SIZE);
+    static_assert(DECOMMITTED_BIT != RED_BIT);
+    static_assert(MetaEntryBase::is_backend_allowed_value(
+      MetaEntryBase::Word::One, DECOMMITTED_BIT));
+    static_assert(MetaEntryBase::is_backend_allowed_value(
+      MetaEntryBase::Word::Two, DECOMMITTED_BIT));
+    ///@}
+
+    /// Both flag bits packed into the low bits of the stored address;
+    /// `set`/`get` preserve exactly these bits and nothing else.
+    static constexpr address_t FLAG_BITS = RED_BIT | DECOMMITTED_BIT;
+
     /// The value of a null node, as returned by `get`
     static constexpr Contents null = 0;
     /// The value of a null node, as stored in a `uintptr_t`.
     static constexpr Contents root = 0;
 
     /**
-     * Set the value.  Preserve the red/black colour.
+     * Set the value.  Preserve the red/black colour and decommitted flag.
      */
     static void set(Handle ptr, Contents r)
     {
-      ptr = r | (static_cast<address_t>(ptr.get()) & RED_BIT);
+      ptr = r | (static_cast<address_t>(ptr.get()) & FLAG_BITS);
     }
 
     /**
-     * Returns the value, stripping out the red/black colour.
+     * Returns the value, stripping out the red/black colour and
+     * decommitted flag.
      */
     static Contents get(const Handle ptr)
     {
-      return ptr.get() & ~RED_BIT;
+      return ptr.get() & ~FLAG_BITS;
     }
 
     /**
@@ -209,6 +237,99 @@ namespace snmalloc
         v = v.get() ^ RED_BIT;
       }
       SNMALLOC_ASSERT(is_red(k) == new_is_red);
+    }
+
+    /**
+     * Has this chunk already been decommitted (`notify_not_using`'d) by
+     * the time-windowed decay sweep while it sits in the buddy cache?
+     * Mirrors `is_red` exactly -- same `ref(true, k)` access pattern,
+     * since both flag bits live in the same backend word.
+     */
+    static bool is_decommitted(Contents k)
+    {
+      return (ref(true, k).get() & DECOMMITTED_BIT) == DECOMMITTED_BIT;
+    }
+
+    /**
+     * Set or clear the decommitted flag for this chunk.  Mirrors
+     * `set_red` exactly.
+     */
+    static void set_decommitted(Contents k, bool new_is_decommitted)
+    {
+      if (new_is_decommitted != is_decommitted(k))
+      {
+        auto v = ref(true, k);
+        v = v.get() ^ DECOMMITTED_BIT;
+      }
+      SNMALLOC_ASSERT(is_decommitted(k) == new_is_decommitted);
+    }
+
+    /**
+     * Called by `Buddy::remove_buddy` immediately before `k` (a chunk
+     * currently sitting in the buddy cache/tree) is merged with its
+     * buddy into one bigger block.
+     *
+     * This is the fix for a real bug found while implementing the
+     * time-windowed decay sweep (see `LargeBuddyRange::maybe_sweep_decay`
+     * in this file): once two chunks merge, the result is a single node
+     * with a single `DECOMMITTED_BIT` -- there is no way to represent
+     * "the lower half of my backing memory was `notify_not_using`'d, the
+     * upper half was not".  If a decommitted chunk were allowed to merge
+     * with a still-committed buddy without reconciling that asymmetry
+     * first, the resulting merged node would report `is_decommitted() ==
+     * false` while actually being half-unmapped/half-protected -- and a
+     * later full-size `notify_not_using`/`notify_using` call spanning
+     * the whole merged block would then operate on memory that was never
+     * actually in the state either call assumes, which is exactly what
+     * produced a `SIGBUS`/`SIGSEGV` crash (observed as a `memset` fault
+     * inside `PALApple::notify_not_using`, and would equally corrupt
+     * accounting on other PALs) during testing of this feature.
+     *
+     * The fix: before a decommitted chunk can be merged away, eagerly
+     * recommit it (`notify_using`) and clear the flag, exactly as if it
+     * had just been reused via `alloc_range`.  This keeps the invariant
+     * that every chunk actually resident in the cache/tree at any given
+     * moment is either fully committed (flag clear) or fully decommitted
+     * (flag set) -- never a mix -- which the merge step depends on.
+     * `k` is passed by the caller pre-merge, i.e. still at its original
+     * `size`, so this only ever recommits exactly the memory that was
+     * (possibly) decommitted, not the larger merged region.
+     */
+    static void on_consolidate(Contents k, size_t size)
+    {
+      if (is_decommitted(k))
+      {
+        DefaultPal::template notify_using<NoZero>(
+          reinterpret_cast<void*>(k), size);
+        set_decommitted(k, false);
+      }
+    }
+
+    /**
+     * Called by `Buddy::remove_block` immediately before a `whole` block
+     * (about to be handed to a caller) is split into two independently
+     * tracked halves: `whole` itself, shrunk down to `size`, and
+     * `second`, the new node for the other half.
+     *
+     * The two halves were one physically committed-or-decommitted unit
+     * an instant ago (whatever `whole` was, both halves were, since
+     * decommit/recommit always acted on the whole span together), but
+     * `second` is a distinct pagemap entry: its own `DECOMMITTED_BIT` is
+     * whatever bits happen to be left over from whenever that specific
+     * address was last independently a tree/cache node, which has no
+     * relationship to `whole`'s current state.  Copy `whole`'s flag onto
+     * `second` so both halves agree with physical reality immediately
+     * after the split, before either can be independently
+     * decommitted/recommitted/re-split again.
+     *
+     * Deliberately does not touch `whole`'s own flag -- `whole` keeps
+     * whatever state it already had; only `second` needs to be brought
+     * into line with it.
+     */
+    static void on_split(Contents whole, Contents second, size_t size)
+    {
+      UNUSED(size);
+      set_decommitted(second, is_decommitted(whole));
     }
 
     static Contents offset(Contents k, size_t size)
@@ -289,12 +410,44 @@ namespace snmalloc
    *
    * MIN_REFILL_SIZE_BITS - The minimum size that the ParentRange can be asked
    * for
+   *
+   * MANAGES_COMMITTED_MEMORY - Whether chunks sitting in this instance's own
+   * buddy cache/tree are backed by memory that has already been through a
+   * `CommitRange<PAL>` layer (i.e. `PAL::notify_using` has been called on
+   * it) at some point before landing here.  Defaults to `true`, matching
+   * every per-thread local-cache instantiation (`LargeObjectRange`,
+   * `ObjectRange`, `MetaRange` in `standard_range.h`/`meta_protected_range.h`
+   * -- all of which sit downstream of a `CommitRange` in their `Pipe`).  The
+   * process-global raw-address-space caches (`GlobalR`, and the
+   * `LargeBuddyRange` instances that sit between `GlobalR` and their own
+   * trailing `CommitRange<PAL>` inside `meta_protected_range.h`) manage
+   * reserved-but-never-committed address space instead and must be
+   * instantiated with this set to `false`.
+   *
+   * This matters because the decay policies below (`decay_rate_ms() == 0`
+   * immediate decommit, and the time-windowed sweep) call
+   * `PAL::notify_not_using`/`notify_using` directly on chunks sitting in
+   * this instance's cache/tree.  Those calls are only meaningful -- and
+   * only safe -- when the chunk is actually committed memory.  Applying
+   * them to a `GlobalR`-style instance's raw address-space cache calls
+   * `madvise`/`mprotect`/(`memset` in debug PALs) on memory that was never
+   * backed in the first place, which is undefined behaviour and was
+   * observed to crash (`SIGBUS`/`SIGSEGV`) during development of the
+   * time-windowed sweep -- and reproduces identically against the
+   * `decay_rate_ms() == 0` immediate-decay path alone, i.e. this is not
+   * specific to the sweep; it is a pre-existing gap in the immediate-decay
+   * design that the sweep's testing happened to surface first.  When this
+   * parameter is `false`, both decay paths are fully disabled at compile
+   * time (`if constexpr`) for that instantiation -- no runtime cost, and no
+   * decommit ever happens for that particular cache, leaving it to whatever
+   * `CommitRange` it eventually feeds into.
    */
   template<
     size_t REFILL_SIZE_BITS,
     size_t MAX_SIZE_BITS,
     SNMALLOC_CONCEPT(IsWritablePagemap) Pagemap,
-    size_t MIN_REFILL_SIZE_BITS = 0>
+    size_t MIN_REFILL_SIZE_BITS = 0,
+    bool MANAGES_COMMITTED_MEMORY = true>
   class LargeBuddyRange
   {
     static_assert(
@@ -328,6 +481,14 @@ namespace snmalloc
       size_t requested_total = 0;
 
       /**
+       * Node representation for `buddy_large`, named so the decay-sweep
+       * machinery below can refer to `Rep::Contents`/`Rep::is_decommitted`
+       * /`Rep::set_decommitted` without repeating the `BuddyChunkRep<Pagemap>`
+       * spelling at every use.
+       */
+      using Rep = BuddyChunkRep<Pagemap>;
+
+      /**
        * Buddy allocator used to represent this range of memory.
        *
        * The fourth template argument plugs in the free-chunk histogram
@@ -336,12 +497,170 @@ namespace snmalloc
        * `LargeBuddyFreeChunkHistogram`, which
        * `get_free_chunk_count_by_log_size` then reads.
        */
-      Buddy<
-        BuddyChunkRep<Pagemap>,
-        MIN_CHUNK_BITS,
-        MAX_SIZE_BITS,
-        LargeBuddyFreeChunkHistogram>
+      Buddy<Rep, MIN_CHUNK_BITS, MAX_SIZE_BITS, LargeBuddyFreeChunkHistogram>
         buddy_large;
+
+      /**
+       * Time-windowed decay policy state (`decay_rate_ms() > 0` case; the
+       * `== 0` "decay immediately" case is handled inline in
+       * `dealloc_range` and does not touch any of this).
+       *
+       * This state is per-`Type`-instance, deliberately -- unlike
+       * `LargeBuddyFreeChunkHistogram` (a process-global singleton keyed
+       * only by absolute log-size), idle-time tracking must be scoped to
+       * the one `buddy_large` it describes.  There can be several live
+       * `LargeBuddyRange::Type` instances at once (the process-singleton
+       * `GlobalR` plus one per-thread local cache); a chunk landing in one
+       * instance's bucket must not reset another instance's idle clock
+       * for what is, from the sweep's point of view, a completely
+       * unrelated set of free chunks.
+       *
+       * Both fields are touched only from `alloc_range`/`dealloc_range`,
+       * i.e. only where `buddy_large` itself is touched, so they share its
+       * synchronisation story exactly: for the process-global instance
+       * (`GlobalR` in `standard_range.h`/`meta_protected_range.h`) that is
+       * the `LockRange` a `GlobalRange` wraps it in (see
+       * `backend_helpers/globalrange.h` + `lockrange.h`); a per-thread
+       * `LargeObjectRange`/`MetaRange` local cache is only ever touched by
+       * its owning thread and needs no lock at all.  Neither case leaves
+       * these fields racing.
+       * @{
+       */
+
+      /**
+       * Last time (per `PAL::time_in_ms()`) a chunk was deposited into
+       * each bucket of `buddy_large`, indexed the same way
+       * `Buddy::to_index` indexes its own `entries` (i.e.
+       * `last_touched_ms[idx]` corresponds to chunks of size
+       * `1 << (MIN_CHUNK_BITS + idx)`).  Zero-initialised, meaning
+       * "never touched" -- which is indistinguishable from "touched at
+       * PAL startup time 0", but that only matters in the first
+       * `decay_rate_ms()` milliseconds of process life, during which
+       * sweeping a still-empty bucket is a harmless no-op anyway.
+       */
+      stl::Array<uint64_t, decltype(buddy_large)::bucket_count()>
+        last_touched_ms{};
+
+      /**
+       * The next time (per `PAL::time_in_ms()`) at which it is worth
+       * walking `last_touched_ms` looking for stale buckets.  Checked on
+       * every `alloc_range`/`dealloc_range` call, so it must stay a cheap
+       * single comparison in the common case where it has not yet
+       * elapsed; the actual sweep only runs once per elapsed window, not
+       * once per call.
+       */
+      uint64_t next_sweep_due_ms = 0;
+
+      /**
+       * Record that a chunk was just deposited into bucket `idx` of
+       * `buddy_large` (`idx` in the same indexing as `Buddy::to_index`,
+       * i.e. relative to `MIN_CHUNK_BITS`, NOT the absolute log-size
+       * `add_block`'s `landed_size_bits_out` reports).
+       */
+      void touch_bucket(size_t idx)
+      {
+        if constexpr (MANAGES_COMMITTED_MEMORY && pal_supports<Time, DefaultPal>)
+        {
+          last_touched_ms[idx] = DefaultPal::time_in_ms();
+        }
+        else
+        {
+          UNUSED(idx);
+        }
+      }
+
+      /**
+       * Time-windowed decay sweep.  Called from the tail of both
+       * `alloc_range` and `dealloc_range` -- there is no dedicated
+       * background thread; this piggybacks on the existing backend
+       * chunk-refill/return cadence, per design.
+       *
+       * Fast path (the overwhelmingly common case on every call): bail
+       * out immediately if either (a) immediate-decay is active
+       * (`decay_rate_ms() == 0`; that policy is handled entirely inline
+       * in `dealloc_range` and owns nothing here), (b) the PAL cannot
+       * report time at all, or (c) the sweep is not yet due.  All three
+       * are single comparisons -- no iteration, no `PAL::time_in_ms()`
+       * call in the common case where (a) or an early (c)-style
+       * short-circuit applies first, keeping this cheap on the hot
+       * backend call path it lives on.
+       *
+       * When due, walks every bucket whose `last_touched_ms[idx]` is
+       * older than `decay_rate_ms()` and, for each chunk cached there
+       * that is not already flagged `is_decommitted`, calls
+       * `PAL::notify_not_using` on it and sets the flag.  Chunks already
+       * flagged are skipped -- the flag exists specifically so a later
+       * sweep pass does not redundantly decommit (and mis-account) a
+       * chunk an earlier pass already returned to the OS.
+       *
+       * Does not touch `last_touched_ms[idx]` itself for buckets it
+       * sweeps: a bucket that stays stale keeps failing the staleness
+       * check and stays a cheap no-op on every subsequent sweep until
+       * something is next added to it (which calls `touch_bucket` and
+       * refreshes the timestamp).  Re-sweeping an already-fully-flagged
+       * stale bucket costs one `is_decommitted` check per cached chunk,
+       * which is bounded by the (small) number of chunks in that bucket.
+       *
+       * Entirely compiled away (the whole body becomes an empty function)
+       * when `MANAGES_COMMITTED_MEMORY` is `false` -- see that template
+       * parameter's documentation on `LargeBuddyRange` for why: chunks
+       * cached by such an instance are reserved-but-uncommitted address
+       * space, and `PAL::notify_not_using` is neither meaningful nor safe
+       * to call on memory that was never actually committed.
+       */
+      void maybe_sweep_decay()
+      {
+        if constexpr (
+          MANAGES_COMMITTED_MEMORY && pal_supports<Time, DefaultPal>)
+        {
+          auto decay_ms = RuntimeConfig::decay_rate_ms();
+          if (decay_ms == 0)
+          {
+            // Immediate-decay policy owns this case entirely (handled
+            // inline in dealloc_range); nothing for the windowed sweep
+            // to do.
+            return;
+          }
+
+          auto now = DefaultPal::time_in_ms();
+          if (now < next_sweep_due_ms)
+            return;
+
+          for (size_t idx = 0; idx < last_touched_ms.size(); idx++)
+          {
+            // `now - last_touched_ms[idx]` rather than
+            // `last_touched_ms[idx] + decay_ms < now` to sidestep any
+            // (extremely unlikely on a 64-bit ms counter, but free to
+            // avoid) overflow of the addition; unsigned wraparound on
+            // the subtraction gives the right answer even if `now` and
+            // `last_touched_ms[idx]` are far apart.
+            if (now - last_touched_ms[idx] < decay_ms)
+              continue;
+
+            buddy_large.for_each_in_bucket(
+              idx, [idx](typename Rep::Contents addr) {
+                if (Rep::is_decommitted(addr))
+                  return;
+
+                auto size = bits::one_at_bit(MIN_CHUNK_BITS + idx);
+                DefaultPal::notify_not_using(
+                  reinterpret_cast<void*>(addr), size);
+                Rep::set_decommitted(addr, true);
+              });
+          }
+
+          // Next sweep in one more decay window.  A full `decay_ms`
+          // period (rather than some finer-grained fraction) keeps the
+          // amortised cost of the walk low -- the sweep is O(number of
+          // buckets), not O(number of cached chunks), so a shorter
+          // period would not meaningfully improve reclaim latency for
+          // any individual chunk (that is still bounded by
+          // `decay_ms` from when it was last touched) while making the
+          // per-call fast-path check succeed proportionally more often.
+          next_sweep_due_ms = now + decay_ms;
+        }
+      }
+      ///@}
 
       /**
        * The parent might not support deallocation if this buddy allocator
@@ -380,9 +699,19 @@ namespace snmalloc
       {
         range_to_pow_2_blocks<MIN_CHUNK_BITS>(
           base, length, [this](capptr::Arena<void> base, size_t align, bool) {
-            auto overflow =
-              capptr::Arena<void>::unsafe_from(reinterpret_cast<void*>(
-                buddy_large.add_block(base.unsafe_uintptr(), align)));
+            size_t landed_size_bits = 0;
+            auto overflow = capptr::Arena<void>::unsafe_from(
+              reinterpret_cast<void*>(buddy_large.add_block(
+                base.unsafe_uintptr(), align, &landed_size_bits)));
+
+            if (overflow == nullptr)
+            {
+              // The chunk came to rest somewhere in this buddy's own
+              // cache/tree; record that its bucket just gained a fresh
+              // (i.e. definitely-not-idle) entry, so the decay sweep
+              // gives it a full window before considering it stale.
+              touch_bucket(landed_size_bits - MIN_CHUNK_BITS);
+            }
 
             dealloc_overflow(overflow);
           });
@@ -485,20 +814,53 @@ namespace snmalloc
 
         if (result != nullptr)
         {
-          // This chunk came from the buddy allocator's own cache/tree
-          // rather than fresh memory from the parent range.  If the
-          // immediate-decay policy is active, the chunk may have been
-          // decommitted while it sat in the buddy cache (see
-          // dealloc_range below), so unconditionally notify the PAL
-          // that we are about to use it again.  This is idempotent and
-          // cheap on POSIX platforms when the chunk was never actually
-          // decommitted.
-          DefaultPal::template notify_using<NoZero>(
-            result.unsafe_ptr(), size);
+          if constexpr (MANAGES_COMMITTED_MEMORY)
+          {
+            // This chunk came from the buddy allocator's own cache/tree
+            // rather than fresh memory from the parent range.  If a decay
+            // policy is active (immediate, i.e. `decay_rate_ms() == 0`; or
+            // the time-windowed sweep below, for `decay_rate_ms() > 0`),
+            // the chunk may have been decommitted while it sat in the
+            // buddy cache, so unconditionally notify the PAL that we are
+            // about to use it again.  This is idempotent and cheap on
+            // POSIX platforms when the chunk was never actually
+            // decommitted.
+            //
+            // Only meaningful when this instance manages committed
+            // memory in the first place -- see `MANAGES_COMMITTED_MEMORY`
+            // on `LargeBuddyRange`.  For a raw-address-space instance
+            // (`GlobalR` and friends) neither decay path below ever runs,
+            // so this call would be pure unnecessary syscall overhead on
+            // every cache hit.
+            DefaultPal::template notify_using<NoZero>(
+              result.unsafe_ptr(), size);
+
+            // Clear the decommitted flag, if it was set.  Correctness of
+            // the *current* use of this chunk does not depend on this --
+            // the unconditional `notify_using` above already made the
+            // memory valid to use regardless of the flag's state.  This
+            // matters for a *future* free/idle cycle of this exact chunk:
+            // without clearing it here, a chunk that the sweep decommitted
+            // once would permanently read as `is_decommitted() == true`
+            // even after being reused and freed again as fully-resident
+            // memory, causing a later sweep pass to wrongly skip
+            // re-decommitting it (see `is_decommitted` and
+            // `maybe_sweep_decay`'s skip check) -- silently leaking RSS
+            // that should have been reclaimed.  `Rep::is_decommitted` is a
+            // stateless pagemap-entry read, so checking before writing is
+            // essentially free and keeps this a no-op on the common case
+            // where the flag was never set.
+            if (Rep::is_decommitted(result.unsafe_uintptr()))
+              Rep::set_decommitted(result.unsafe_uintptr(), false);
+
+            maybe_sweep_decay();
+          }
           return result;
         }
 
-        return refill(size);
+        result = refill(size);
+        maybe_sweep_decay();
+        return result;
       }
 
       void dealloc_range(capptr::Arena<void> base, size_t size)
@@ -515,26 +877,95 @@ namespace snmalloc
           }
         }
 
+        size_t landed_size_bits = 0;
         auto overflow =
           capptr::Arena<void>::unsafe_from(reinterpret_cast<void*>(
-            buddy_large.add_block(base.unsafe_uintptr(), size)));
+            buddy_large.add_block(
+              base.unsafe_uintptr(), size, &landed_size_bits)));
 
-        if (overflow == nullptr && RuntimeConfig::decay_rate_ms() == 0)
+        if (overflow == nullptr)
         {
-          // The chunk was absorbed into this buddy allocator's own
-          // cache/tree (it was not consolidated all the way up to a
-          // block big enough to hand back to the parent range).  With
-          // immediate decay requested, return the physical pages to
-          // the OS right away rather than letting them sit here fully
-          // committed indefinitely.  The chunk remains a live,
-          // addressable node in the buddy cache/tree -- its RB-tree
-          // bookkeeping lives in the pagemap metadata entry, not in
-          // the chunk's own memory -- so it is safe to decommit while
-          // still linked in.
-          DefaultPal::notify_not_using(base.unsafe_ptr(), size);
+          if constexpr (MANAGES_COMMITTED_MEMORY)
+          {
+            // Both decay policies below only make sense -- and are only
+            // safe -- when this instance's cache/tree holds memory that
+            // has actually been committed at some point (see
+            // `MANAGES_COMMITTED_MEMORY` on `LargeBuddyRange`).  For a
+            // raw-address-space instance (`GlobalR` and friends) this
+            // whole block compiles away: the chunk was never committed,
+            // so there is nothing to eagerly decommit and no bucket
+            // timestamp worth tracking for a sweep that will never run
+            // against it.
+            if (RuntimeConfig::decay_rate_ms() == 0)
+            {
+              // The chunk was absorbed into this buddy allocator's own
+              // cache/tree (it was not consolidated all the way up to a
+              // block big enough to hand back to the parent range).  With
+              // immediate decay requested, return the physical pages to
+              // the OS right away rather than letting them sit here fully
+              // committed indefinitely.  The chunk remains a live,
+              // addressable node in the buddy cache/tree -- its RB-tree
+              // bookkeeping lives in the pagemap metadata entry, not in
+              // the chunk's own memory -- so it is safe to decommit while
+              // still linked in.
+              //
+              // Must decommit at the block's *actual landed* address and
+              // size (`landed_size_bits`, via `align_down`), not the
+              // original `base`/`size` that was passed in: `add_block`
+              // may have consolidated `base` with one or more buddies
+              // before coming to rest, in which case `base` is no longer
+              // the address of the live tree/cache node at all (it could
+              // now be the upper half of a bigger, differently-based
+              // block) and `size` badly undercounts how much memory the
+              // node actually spans.  Decommitting only the original
+              // `size` bytes at `base` -- while flagging `base` as
+              // decommitted -- would physically release just a sub-slice
+              // of a bigger node whose *own* tracked address is
+              // elsewhere, leaving that node's flag reporting "fully
+              // committed" while part of its span is actually
+              // `PROT_NONE`.  A later merge or hand-off of that node
+              // (including all the way up to a parent `CommitRange`,
+              // which unconditionally decommits on every dealloc) then
+              // trusts the "committed" flag and calls `notify_not_using`
+              // again on memory that is already decommitted -- exactly
+              // the double-decommit crash this whole mechanism exists to
+              // prevent.  Operating on the landed block's own address/
+              // size keeps this consistent with what
+              // `Rep::on_consolidate`/`on_split` and the windowed sweep
+              // all assume: the decommitted flag and the actual PAL
+              // state always describe the same, single, live node.
+              auto landed_size = bits::one_at_bit(landed_size_bits);
+              auto landed_base =
+                Rep::align_down(base.unsafe_uintptr(), landed_size);
+              DefaultPal::notify_not_using(
+                reinterpret_cast<void*>(landed_base), landed_size);
+
+              // Mark the flag so that any future merge
+              // (`Buddy::add_block`'s `on_consolidate` calls) or split
+              // (`Buddy::remove_block`'s `on_split` call) knows this
+              // chunk's memory is not currently committed and reconciles
+              // correctly, and so `alloc_range` recommits it on reuse.
+              // Without this, `is_decommitted` would always read `false`
+              // for chunks decommitted via *this* branch (as opposed to
+              // the windowed sweep, which does set it).
+              Rep::set_decommitted(landed_base, true);
+            }
+            else
+            {
+              // Time-windowed decay policy: record that this bucket just
+              // gained a fresh entry so the sweep gives it a full
+              // `decay_rate_ms()` window before treating it as stale. Not
+              // done in the immediate-decay branch above -- that chunk is
+              // decommitted right away and `last_touched_ms` is only ever
+              // consulted by the windowed sweep, which is a no-op
+              // whenever `decay_rate_ms() == 0`.
+              touch_bucket(landed_size_bits - MIN_CHUNK_BITS);
+            }
+          }
         }
 
         dealloc_overflow(overflow);
+        maybe_sweep_decay();
       }
 
       /**

@@ -147,6 +147,28 @@ namespace snmalloc
       UNUSED(k, size);
       return true;
     }
+
+    /**
+     * Called by `Buddy::remove_buddy` immediately before a node is
+     * merged away into a bigger block.  `SmallBuddyRange` has no
+     * decommit policy of its own (small in-place-stored free chunks are
+     * never individually decommitted), so there is no per-node state to
+     * reconcile here.
+     */
+    static void on_consolidate(Contents k, size_t size)
+    {
+      UNUSED(k, size);
+    }
+
+    /**
+     * Called by `Buddy::remove_block` immediately before a block is split
+     * into two independently-tracked halves.  Same rationale as
+     * `on_consolidate`: no decommit policy here, so nothing to propagate.
+     */
+    static void on_split(Contents whole, Contents second, size_t size)
+    {
+      UNUSED(whole, second, size);
+    }
   };
 
   struct SmallBuddyRange

@@ -27,13 +27,24 @@ namespace snmalloc
   struct StandardLocalState : BaseLocalStateConstants
   {
     // Global range of memory, expose this so can be filled by init.
+    //
+    // This LargeBuddyRange sits upstream of the `CommitRange<PAL>` below
+    // (it is `Stats`'s parent, not the other way around), so its own
+    // cache/tree holds reserved-but-never-committed address space, not
+    // memory the PAL has actually been told is in use.  Pass
+    // `MANAGES_COMMITTED_MEMORY = false` so neither decay policy
+    // (`decay_rate_ms() == 0` immediate decommit, nor the time-windowed
+    // sweep) ever calls `PAL::notify_not_using`/`notify_using` on it --
+    // doing so on memory that was never committed is unsafe and was
+    // observed to crash.
     using GlobalR = Pipe<
       Base,
       LargeBuddyRange<
         GlobalCacheSizeBits,
         bits::BITS - 1,
         Pagemap,
-        MinSizeBits>,
+        MinSizeBits,
+        /* MANAGES_COMMITTED_MEMORY = */ false>,
       LogRange<2>,
       GlobalRange>;
 

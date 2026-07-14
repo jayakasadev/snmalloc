@@ -102,6 +102,17 @@ namespace snmalloc
           if (!Rep::can_consolidate(addr, size))
             return false;
 
+          // The buddy is about to be merged with `addr` into one bigger
+          // block; give the representation a chance to reconcile any
+          // policy-specific per-node state before that happens.  In
+          // particular, `BuddyChunkRep` uses this to recommit a
+          // previously-decommitted buddy: the merged block is a single
+          // node going forward and has no way to represent "half of my
+          // backing memory is decommitted, half is not", so any such
+          // asymmetry must be resolved (by recommitting) before the two
+          // halves become inseparable.
+          Rep::on_consolidate(buddy, size);
+
           e = entries[idx].tree.remove_min();
           // One free block leaves the system at this bucket: either the
           // matched cache slot is overwritten with the tree's minimum
@@ -126,6 +137,9 @@ namespace snmalloc
       if (!Rep::can_consolidate(addr, size))
         return false;
 
+      // See the matching comment on the cache-slot branch above.
+      Rep::on_consolidate(buddy, size);
+
       entries[idx].tree.remove_path(path);
       Histogram::on_remove(MIN_SIZE_BITS + idx);
       return true;
@@ -143,13 +157,44 @@ namespace snmalloc
      * Returns null, if the block is successfully added. Otherwise, returns the
      * consolidated block that is MAX_SIZE_BITS big, and hence too large for
      * this allocator.
+     *
+     * If `landed_size_bits_out` is non-null and the block is successfully
+     * added (i.e. this returns `Rep::null`), `*landed_size_bits_out` is set
+     * to the absolute log2 size-bucket (`MIN_SIZE_BITS + idx`) that the
+     * block actually came to rest in.  Because a block may consolidate with
+     * its buddy any number of times before finding an empty bucket, this
+     * can differ from `next_pow2_bits(size)` -- callers that need to know
+     * exactly which bucket's population changed (e.g. to update per-bucket
+     * "last touched" bookkeeping outside this class) should read it back
+     * through this out-parameter rather than recomputing it from `size`.
+     * Left unmodified on the "too large for this allocator" path, since
+     * the block leaves this `Buddy` instance entirely in that case and
+     * there is no bucket here to record.  Defaults to `nullptr`, which
+     * costs nothing extra: the compiler elides the unused stores.
      */
-    typename Rep::Contents add_block(typename Rep::Contents addr, size_t size)
+    typename Rep::Contents add_block(
+      typename Rep::Contents addr,
+      size_t size,
+      size_t* landed_size_bits_out = nullptr)
     {
       validate_block(addr, size);
 
       if (remove_buddy(addr, size))
       {
+        // `remove_buddy` already reconciled the *other* half's (the
+        // buddy's) decommitted state via `Rep::on_consolidate` before
+        // removing it.  `addr` itself -- the block passed in here -- is
+        // the other half of this same merge, and needs exactly the same
+        // reconciliation: it may carry its own stale `DECOMMITTED_BIT`
+        // from whatever it was doing before this call, and the merged
+        // node that results (`align_down(addr, size * 2)` below, which
+        // is `addr`'s own value whenever `addr` happens to be the lower
+        // of the two addresses) inherits whichever of the two flags
+        // ends up attached to that address, unless it is normalised
+        // here first.  Must run at the *original* `size` -- that is the
+        // granularity `addr`'s flag (if any) was actually set at.
+        Rep::on_consolidate(addr, size);
+
         // Add to next level cache
         size *= 2;
         addr = Rep::align_down(addr, size);
@@ -161,7 +206,7 @@ namespace snmalloc
           // Too big for this buddy allocator.
           return addr;
         }
-        return add_block(addr, size);
+        return add_block(addr, size, landed_size_bits_out);
       }
 
       auto idx = to_index(size);
@@ -175,6 +220,8 @@ namespace snmalloc
           // One new free block enters the system at this bucket via
           // the inline cache.
           Histogram::on_add(MIN_SIZE_BITS + idx);
+          if (landed_size_bits_out != nullptr)
+            *landed_size_bits_out = MIN_SIZE_BITS + idx;
           return Rep::null;
         }
       }
@@ -185,6 +232,8 @@ namespace snmalloc
       // One new free block enters the system at this bucket via the
       // red-black tree (cache slots were all full).
       Histogram::on_add(MIN_SIZE_BITS + idx);
+      if (landed_size_bits_out != nullptr)
+        *landed_size_bits_out = MIN_SIZE_BITS + idx;
       invariant();
       return Rep::null;
     }
@@ -235,9 +284,71 @@ namespace snmalloc
 
       auto second = Rep::offset(bigger, size);
 
+      // `bigger` is about to be split into two independently-tracked
+      // nodes (`bigger`, now half its former size, and `second`).  Give
+      // the representation a chance to propagate any policy-specific
+      // per-node state from the whole onto the new half before the split
+      // takes effect.  In particular, `BuddyChunkRep` uses this to copy
+      // `bigger`'s decommitted flag onto `second`: the two halves were
+      // physically one committed-or-decommitted unit an instant ago, but
+      // `second` is a distinct pagemap entry whose own flag bits are
+      // otherwise whatever was left over from whenever that address was
+      // last independently a tree/cache node -- almost certainly stale
+      // and unrelated to `bigger`'s actual current state.  Without this,
+      // `second` could sit in the cache reporting the wrong commit state
+      // entirely (in either direction): falsely "committed" while
+      // actually still decommitted memory (a later sweep would then skip
+      // ever decommitting it, silently leaking RSS), or falsely
+      // "decommitted" while actually fully resident (a later sweep would
+      // then skip calling `notify_not_using` on already-decommitted
+      // memory that was never actually released, again just skipping
+      // work -- but the first, unnoticed direction is the one that
+      // matters: a *second* real decommit call from a future sweep
+      // landing on memory a stale flag incorrectly reported as
+      // "not yet decommitted", when it had genuinely already been
+      // released by an earlier pass, which is exactly the scenario that
+      // produced a `SIGBUS`/`SIGSEGV` crash during development of the
+      // decay sweep this hook exists for).
+      Rep::on_split(bigger, second, size);
+
       // Split large block
       add_block(second, size);
       return bigger;
+    }
+
+    /**
+     * Number of size buckets this allocator manages, i.e. the number of
+     * entries in the `entries` array.  Exposed so callers that keep
+     * parallel per-bucket bookkeeping (indexed the same way `to_index`
+     * indexes `entries`) can size their own array to match without
+     * duplicating `MAX_SIZE_BITS - MIN_SIZE_BITS` at the call site.
+     */
+    static constexpr size_t bucket_count()
+    {
+      return MAX_SIZE_BITS - MIN_SIZE_BITS;
+    }
+
+    /**
+     * Visit every block currently cached at bucket `idx` (both the inline
+     * `cache` slots and the red-black tree), calling `f(addr)` once per
+     * block.  Read-only: does not remove, insert or otherwise alter the
+     * bucket's contents or the tree's shape.  `idx` uses the same indexing
+     * as `to_index` -- i.e. `idx = size_bits - MIN_SIZE_BITS`.
+     *
+     * Intended for callers that need to inspect (not mutate) the free set
+     * at a given bucket, e.g. a time-based decommit sweep that only wants
+     * to touch buckets whose bookkeeping says they have gone idle.
+     */
+    template<typename F>
+    void for_each_in_bucket(size_t idx, F f)
+    {
+      SNMALLOC_ASSERT(idx < entries.size());
+      for (auto& e : entries[idx].cache)
+      {
+        if (!Rep::equal(Rep::null, e))
+          f(e);
+      }
+      entries[idx].tree.for_each(f);
     }
   };
 } // namespace snmalloc
