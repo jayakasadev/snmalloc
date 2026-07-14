@@ -104,13 +104,8 @@ namespace snmalloc
 
           // The buddy is about to be merged with `addr` into one bigger
           // block; give the representation a chance to reconcile any
-          // policy-specific per-node state before that happens.  In
-          // particular, `BuddyChunkRep` uses this to recommit a
-          // previously-decommitted buddy: the merged block is a single
-          // node going forward and has no way to represent "half of my
-          // backing memory is decommitted, half is not", so any such
-          // asymmetry must be resolved (by recommitting) before the two
-          // halves become inseparable.
+          // policy-specific per-node state first.  See
+          // `BuddyChunkRep::on_consolidate` for why this matters.
           Rep::on_consolidate(buddy, size);
 
           e = entries[idx].tree.remove_min();
@@ -160,17 +155,11 @@ namespace snmalloc
      *
      * If `landed_size_bits_out` is non-null and the block is successfully
      * added (i.e. this returns `Rep::null`), `*landed_size_bits_out` is set
-     * to the absolute log2 size-bucket (`MIN_SIZE_BITS + idx`) that the
-     * block actually came to rest in.  Because a block may consolidate with
-     * its buddy any number of times before finding an empty bucket, this
-     * can differ from `next_pow2_bits(size)` -- callers that need to know
-     * exactly which bucket's population changed (e.g. to update per-bucket
-     * "last touched" bookkeeping outside this class) should read it back
-     * through this out-parameter rather than recomputing it from `size`.
-     * Left unmodified on the "too large for this allocator" path, since
-     * the block leaves this `Buddy` instance entirely in that case and
-     * there is no bucket here to record.  Defaults to `nullptr`, which
-     * costs nothing extra: the compiler elides the unused stores.
+     * to the absolute log2 size-bucket the block actually came to rest in,
+     * which can differ from `next_pow2_bits(size)` since the block may
+     * consolidate with its buddy any number of times first.  It is left
+     * unset on the "too large for this allocator" path, and defaults to
+     * `nullptr`, which costs nothing extra.
      */
     typename Rep::Contents add_block(
       typename Rep::Contents addr,

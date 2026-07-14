@@ -277,13 +277,12 @@ namespace snmalloc
      * upper half was not".  If a decommitted chunk were allowed to merge
      * with a still-committed buddy without reconciling that asymmetry
      * first, the resulting merged node would report `is_decommitted() ==
-     * false` while actually being half-unmapped/half-protected -- and a
-     * later full-size `notify_not_using`/`notify_using` call spanning
-     * the whole merged block would then operate on memory that was never
-     * actually in the state either call assumes, which is exactly what
-     * produced a `SIGBUS`/`SIGSEGV` crash (observed as a `memset` fault
-     * inside `PALApple::notify_not_using`, and would equally corrupt
-     * accounting on other PALs) during testing of this feature.
+     * false` while actually being half-unmapped/half-protected, so a
+     * later full-size `notify_not_using` on that merged block would
+     * double-decommit already-released memory -- exactly what produced
+     * a `SIGBUS`/`SIGSEGV` crash (observed as a `memset` fault inside
+     * `PALApple::notify_not_using`, and would equally corrupt accounting
+     * on other PALs) during testing of this feature.
      *
      * The fix: before a decommitted chunk can be merged away, eagerly
      * recommit it (`notify_using`) and clear the flag, exactly as if it
@@ -311,16 +310,10 @@ namespace snmalloc
      * tracked halves: `whole` itself, shrunk down to `size`, and
      * `second`, the new node for the other half.
      *
-     * The two halves were one physically committed-or-decommitted unit
-     * an instant ago (whatever `whole` was, both halves were, since
-     * decommit/recommit always acted on the whole span together), but
-     * `second` is a distinct pagemap entry: its own `DECOMMITTED_BIT` is
-     * whatever bits happen to be left over from whenever that specific
-     * address was last independently a tree/cache node, which has no
-     * relationship to `whole`'s current state.  Copy `whole`'s flag onto
-     * `second` so both halves agree with physical reality immediately
-     * after the split, before either can be independently
-     * decommitted/recommitted/re-split again.
+     * Copies `whole`'s decommitted flag onto `second`, so both halves
+     * agree with physical reality immediately after the split.  See
+     * `on_consolidate` above for why leaving this flag unreconciled is
+     * dangerous.
      *
      * Deliberately does not touch `whole`'s own flag -- `whole` keeps
      * whatever state it already had; only `second` needs to be brought
@@ -412,35 +405,20 @@ namespace snmalloc
    * for
    *
    * MANAGES_COMMITTED_MEMORY - Whether chunks sitting in this instance's own
-   * buddy cache/tree are backed by memory that has already been through a
-   * `CommitRange<PAL>` layer (i.e. `PAL::notify_using` has been called on
-   * it) at some point before landing here.  Defaults to `true`, matching
-   * every per-thread local-cache instantiation (`LargeObjectRange`,
-   * `ObjectRange`, `MetaRange` in `standard_range.h`/`meta_protected_range.h`
-   * -- all of which sit downstream of a `CommitRange` in their `Pipe`).  The
-   * process-global raw-address-space caches (`GlobalR`, and the
-   * `LargeBuddyRange` instances that sit between `GlobalR` and their own
-   * trailing `CommitRange<PAL>` inside `meta_protected_range.h`) manage
-   * reserved-but-never-committed address space instead and must be
-   * instantiated with this set to `false`.
+   * buddy cache/tree are backed by memory that has already been committed
+   * (i.e. `PAL::notify_using` has been called on it) before landing here.
+   * Defaults to `true`, matching the per-thread local caches, which sit
+   * downstream of a `CommitRange`; the process-global raw-address-space
+   * caches (`GlobalR` and friends) manage reserved-but-never-committed
+   * space instead and must set this to `false`.
    *
-   * This matters because the decay policies below (`decay_rate_ms() == 0`
-   * immediate decommit, and the time-windowed sweep) call
-   * `PAL::notify_not_using`/`notify_using` directly on chunks sitting in
-   * this instance's cache/tree.  Those calls are only meaningful -- and
-   * only safe -- when the chunk is actually committed memory.  Applying
-   * them to a `GlobalR`-style instance's raw address-space cache calls
-   * `madvise`/`mprotect`/(`memset` in debug PALs) on memory that was never
-   * backed in the first place, which is undefined behaviour and was
-   * observed to crash (`SIGBUS`/`SIGSEGV`) during development of the
-   * time-windowed sweep -- and reproduces identically against the
-   * `decay_rate_ms() == 0` immediate-decay path alone, i.e. this is not
-   * specific to the sweep; it is a pre-existing gap in the immediate-decay
-   * design that the sweep's testing happened to surface first.  When this
-   * parameter is `false`, both decay paths are fully disabled at compile
-   * time (`if constexpr`) for that instantiation -- no runtime cost, and no
-   * decommit ever happens for that particular cache, leaving it to whatever
-   * `CommitRange` it eventually feeds into.
+   * It matters because the decay policies below call
+   * `PAL::notify_not_using`/`notify_using` directly on cached chunks, which
+   * is only safe on memory that is actually committed; doing so on
+   * never-committed address space is undefined behaviour and was observed
+   * to crash (`SIGBUS`/`SIGSEGV`) during development. When this parameter
+   * is `false`, both decay paths compile away entirely (`if constexpr`) --
+   * no cost, and no decommit ever happens for that cache.
    */
   template<
     size_t REFILL_SIZE_BITS,
@@ -572,41 +550,13 @@ namespace snmalloc
       /**
        * Time-windowed decay sweep.  Called from the tail of both
        * `alloc_range` and `dealloc_range` -- there is no dedicated
-       * background thread; this piggybacks on the existing backend
-       * chunk-refill/return cadence, per design.
-       *
-       * Fast path (the overwhelmingly common case on every call): bail
-       * out immediately if either (a) immediate-decay is active
-       * (`decay_rate_ms() == 0`; that policy is handled entirely inline
-       * in `dealloc_range` and owns nothing here), (b) the PAL cannot
-       * report time at all, or (c) the sweep is not yet due.  All three
-       * are single comparisons -- no iteration, no `PAL::time_in_ms()`
-       * call in the common case where (a) or an early (c)-style
-       * short-circuit applies first, keeping this cheap on the hot
-       * backend call path it lives on.
-       *
-       * When due, walks every bucket whose `last_touched_ms[idx]` is
-       * older than `decay_rate_ms()` and, for each chunk cached there
-       * that is not already flagged `is_decommitted`, calls
-       * `PAL::notify_not_using` on it and sets the flag.  Chunks already
-       * flagged are skipped -- the flag exists specifically so a later
-       * sweep pass does not redundantly decommit (and mis-account) a
-       * chunk an earlier pass already returned to the OS.
-       *
-       * Does not touch `last_touched_ms[idx]` itself for buckets it
-       * sweeps: a bucket that stays stale keeps failing the staleness
-       * check and stays a cheap no-op on every subsequent sweep until
-       * something is next added to it (which calls `touch_bucket` and
-       * refreshes the timestamp).  Re-sweeping an already-fully-flagged
-       * stale bucket costs one `is_decommitted` check per cached chunk,
-       * which is bounded by the (small) number of chunks in that bucket.
-       *
-       * Entirely compiled away (the whole body becomes an empty function)
+       * background thread. The fast path (immediate-decay active, the
+       * PAL can't report time, or the sweep isn't due yet) is just a
+       * few comparisons.  When due, it walks each stale bucket and
+       * decommits any chunk not already flagged `is_decommitted`, then
+       * reschedules the next sweep one window out.  No-ops entirely
        * when `MANAGES_COMMITTED_MEMORY` is `false` -- see that template
-       * parameter's documentation on `LargeBuddyRange` for why: chunks
-       * cached by such an instance are reserved-but-uncommitted address
-       * space, and `PAL::notify_not_using` is neither meaningful nor safe
-       * to call on memory that was never actually committed.
+       * parameter's own documentation on `LargeBuddyRange`.
        */
       void maybe_sweep_decay()
       {
@@ -918,22 +868,13 @@ namespace snmalloc
               // now be the upper half of a bigger, differently-based
               // block) and `size` badly undercounts how much memory the
               // node actually spans.  Decommitting only the original
-              // `size` bytes at `base` -- while flagging `base` as
-              // decommitted -- would physically release just a sub-slice
-              // of a bigger node whose *own* tracked address is
-              // elsewhere, leaving that node's flag reporting "fully
-              // committed" while part of its span is actually
-              // `PROT_NONE`.  A later merge or hand-off of that node
-              // (including all the way up to a parent `CommitRange`,
-              // which unconditionally decommits on every dealloc) then
-              // trusts the "committed" flag and calls `notify_not_using`
-              // again on memory that is already decommitted -- exactly
-              // the double-decommit crash this whole mechanism exists to
-              // prevent.  Operating on the landed block's own address/
-              // size keeps this consistent with what
-              // `Rep::on_consolidate`/`on_split` and the windowed sweep
-              // all assume: the decommitted flag and the actual PAL
-              // state always describe the same, single, live node.
+              // `size` bytes at `base` would physically release just a
+              // sub-slice of a bigger node whose *own* tracked address is
+              // elsewhere, leaving that node's flag out of sync with
+              // reality.  Operating on the landed block's own address/
+              // size instead keeps this consistent with the invariant
+              // `on_consolidate`/`on_split` maintain (see there for the
+              // crash this prevents).
               auto landed_size = bits::one_at_bit(landed_size_bits);
               auto landed_base =
                 Rep::align_down(base.unsafe_uintptr(), landed_size);

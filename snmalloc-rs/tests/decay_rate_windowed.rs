@@ -105,23 +105,11 @@
 //! by the small-object frontend slab allocator, which never calls into
 //! this backend range at all.
 //!
-//! (Whether `decay_rate_immediate.rs`'s own 12 MiB allocation is
-//! actually exercising the `decay_rate_ms() == 0` branch in
-//! `dealloc_range`, as opposed to also incidentally landing on
-//! `CommitRange`'s unconditional decommit, is a fair question raised
-//! by the above -- but out of scope to fix here; see this file's
-//! accompanying report for that finding. This file does not modify
-//! `decay_rate_immediate.rs`'s test logic, only extracts the shared
-//! `smaps_rollup`-reading helpers.)
-//!
 //! ## Why this measures `LazyFree`, not `VmRSS`
 //!
-//! See the equivalent section in `decay_rate_immediate.rs` -- the
-//! reasoning is identical (`MADV_FREE` is a lazy hint; `VmRSS` does not
-//! drop on its own, but `/proc/self/smaps_rollup`'s `LazyFree:` field is
-//! updated the instant the kernel tags the pages). This file reuses
-//! those exact helpers rather than duplicating the reasoning -- see
-//! `decay_smaps/mod.rs`.
+//! Same reasoning as `decay_rate_immediate.rs` -- `MADV_FREE` doesn't
+//! drop `VmRSS` on its own; see `decay_smaps/mod.rs` for the full
+//! explanation.
 //!
 //! Linux-only, for the same reasons as `decay_rate_immediate.rs`:
 //! `/proc/self/smaps_rollup` is a Linux-specific interface, and
@@ -149,7 +137,10 @@
 //! drives `SnMalloc` directly via `SnMalloc::new()` + `GlobalAlloc`,
 //! no `#[global_allocator]` needed.
 
-#![cfg(target_os = "linux")]
+// Also skipped under `qemu`: that build raises `MAX_SMALL_SIZECLASS_SIZE`
+// past `SWEEP_TRIGGER_ALLOC_SIZE` (see `sizeclassconfig.h`), so this
+// file's size assumptions no longer hold.
+#![cfg(all(target_os = "linux", not(feature = "qemu")))]
 
 mod decay_smaps;
 

@@ -44,22 +44,12 @@
 //! `MADV_FREE_REUSABLE`) that would need a different observability
 //! technique entirely.
 //!
-//! Like `memory_stats.rs`, this measures process-global resources
-//! (RSS / smaps) that other allocating tests running in parallel
-//! threads of the same binary could disturb. Cargo runs each file
-//! under `tests/` as its own binary/process, so putting this test in
-//! its own file gives it the isolation it needs -- mirroring the
-//! rationale at the top of `memory_stats.rs`.
-//!
-//! Allocator-invocation style: this test drives `SnMalloc` directly
-//! via `SnMalloc::new()` + the `GlobalAlloc` trait methods, the same
-//! pattern `memory_stats.rs` and `full_stats.rs` use, rather than
-//! installing `#[global_allocator]`. The `madvise` calls under test
-//! happen at the PAL level inside the C++ backend and are triggered
-//! by our own explicit `alloc`/`dealloc` calls; we don't need Rust's
-//! incidental allocations (`Vec`, `String`, thread spawn, etc.) to
-//! also route through SnMalloc for this test to be meaningful, so
-//! there is no need to install `#[global_allocator]`.
+//! Isolation and allocator-invocation style: same rationale as
+//! `memory_stats.rs` -- this measures process-global resources (RSS /
+//! smaps) that other allocating tests could disturb, hence its own
+//! file, and drives `SnMalloc` directly rather than installing
+//! `#[global_allocator]`; see `memory_stats.rs`'s doc comment for the
+//! full reasoning.
 
 #![cfg(target_os = "linux")]
 
@@ -194,7 +184,6 @@ fn decay_rate_zero_marks_pages_lazyfree_after_free() {
     // during the free), so we don't assert `rss_after <= rss_peak`.
     // It is captured only for diagnostics in the failure message
     // below.
-    let _ = rss_after;
 
     // The load-bearing assertion: the kernel must have tagged
     // (approximately) the freed allocation's worth of pages as
