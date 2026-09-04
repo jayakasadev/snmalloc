@@ -17,6 +17,14 @@ include = [
     "upstream/CMakeLists.txt",
     "upstream/src/**",
     "upstream/fuzzing/**",
+    # Ships scripts/dump_branch_hints.py, so the published tarball can
+    # regenerate the branch-hints JSON that snmalloc-tools reads.
+    "upstream/scripts/**",
+    # Ships the upstream cmake/ directory, so the bundled CMakeLists.txt can
+    # `include(...)` snmalloc_pgo.cmake and run_coverage.cmake.  Without this,
+    # `cargo package` drops the directory and building the published tarball
+    # fails with `include could not find requested file: snmalloc_pgo.cmake`.
+    "upstream/cmake/**",
 ]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -38,7 +46,19 @@ usecxx17 = []
 check = []
 lto = []
 notls = []
-stats = []
+## Tiered allocator stats.  Each feature sets a CMake option; see
+## snmalloc-sys/build.rs.
+#
+#   * `stats-basic` -- BASIC tier: frontend fast/slow path counters, backend
+#                      commit/decommit accounting, largebuddy free-chunk
+#                      histogram.  Sets `-DSNMALLOC_STATS_BASIC=ON`.
+#   * `stats-full`  -- FULL tier: BASIC plus per-size-class and lifetime
+#                      histograms.  Sets `-DSNMALLOC_STATS_FULL=ON`, which
+#                      also enables BASIC.
+#   * `stats`       -- alias for `stats-basic`.
+stats = ["stats-basic"]
+stats-basic = []
+stats-full = ["stats-basic"]
 usewait-on-address = []
 libc-api = []
 tracing = []
@@ -47,3 +67,4 @@ vendored-stl = []
 check-loads = []
 pageid = []
 gwp-asan = []
+profiling = []
