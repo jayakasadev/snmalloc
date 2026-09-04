@@ -20,3 +20,11 @@
 #include "staticconditionalrange.h"
 #include "statsrange.h"
 #include "subrange.h"
+
+#ifdef SNMALLOC_PROFILE
+// Pull in the profiler hook bodies once commonconfig.h's
+// LazyArrayClientMetaDataProvider is visible.  The entry points are declared
+// in profile/hooks.h; their template definitions live here so any TU that
+// goes through snmalloc_core.h sees them at instantiation time.
+#  include "../profile/record.h"
+#endif

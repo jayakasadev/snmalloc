@@ -6,6 +6,10 @@
 #include <errno.h>
 #include <string.h>
 
+#ifdef SNMALLOC_PROFILE
+#  include "../profile/record.h"
+#endif
+
 namespace snmalloc::libc
 {
   SNMALLOC_SLOW_PATH inline void* set_error(int err = ENOMEM)
@@ -108,6 +112,11 @@ namespace snmalloc::libc
     // Keep the current allocation if the given size is in the same sizeclass.
     if (sz == round_size(size))
     {
+      // Same pointer and sizeclass, new request size: if this allocation was
+      // sampled, record the new size. The out-of-place path below is not
+      // hooked -- it is an alloc, a memcpy and a dealloc, which the alloc and
+      // dealloc hooks already cover. No-op when profiling is disabled.
+      snmalloc::profile::on_realloc<snmalloc::Config>(ptr, size, sz);
       return ptr;
     }
 

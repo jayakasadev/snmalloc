@@ -2,6 +2,7 @@
 
 #include "../ds/ds.h"
 #include "../ds/pool.h"
+#include "../profile/hooks.h"
 #include "check_init.h"
 #include "freelist.h"
 #include "metadata.h"
@@ -485,6 +486,15 @@ namespace snmalloc
       if (SNMALLOC_LIKELY(entry.get_remote() == public_state()))
       {
         auto meta = entry.get_slab_metadata();
+
+        // H2 hook: remote-ingest fast path.  An object freed by another thread
+        // is about to be spliced back onto the slab's local free queue, after
+        // which it is indistinguishable from a same-thread free -- so clear its
+        // profile slot here, on the destination thread, before the splice.
+        // Idempotent against the H1 clear the source thread already did (the
+        // slot CAS short-circuits on null), and the re-entrancy guard prevents
+        // transitive re-entry.
+        profile::on_dealloc<Config>(msg.unsafe_ptr());
 
         auto unreturned = dealloc_local_objects_fast(
           msg, entry, meta, entropy, domesticate, bytes_returned);
@@ -1025,6 +1035,19 @@ namespace snmalloc
     template<typename CheckInit = CheckInitNoOp>
     SNMALLOC_FAST_PATH void dealloc(void* p_raw) noexcept
     {
+      // H1 hook: the waist of the dealloc API -- every public free entry point
+      // (free, ::operator delete, jemalloc-compat, Rust shims, ...) funnels
+      // through here.  Runs before the dealloc logic so profile cleanup sees
+      // the pointer still live (sizeclass / slab metadata valid), and any
+      // profile-internal dealloc is short-circuited by the re-entrancy guard.
+      // The force-inlined peek handles the common "never sampled" case with no
+      // call frame; only a non-null slot pays the full hook.  No-op when
+      // profiling is disabled.
+      if (!profile::on_dealloc_peek<Config>(p_raw))
+      {
+        profile::on_dealloc<Config>(p_raw);
+      }
+
 #ifdef __CHERI_PURE_CAPABILITY__
       /*
        * On CHERI platforms, snap the provided pointer to its base, ignoring
@@ -1347,6 +1370,13 @@ namespace snmalloc
       }
 
       dealloc_cheri_checks(p_tame.unsafe_ptr());
+      // H3 hook: SecondaryAllocator escape hatch.  This pointer was not
+      // allocated by an snmalloc front-end (GWP-ASan guard page, sandboxed
+      // secondary pool, ...) so it has no profile slot.  H1 already fired on it
+      // above; re-firing here is idempotent (slot CAS + re-entrancy guard) and
+      // is a defensive belt-and-braces should a future path ever reach H3
+      // without traversing H1.  No-op when profiling is disabled.
+      profile::on_dealloc<Config>(p_tame.unsafe_ptr());
       Config::SecondaryAllocator::deallocate(p_tame.unsafe_ptr());
     }
 
@@ -1378,6 +1408,14 @@ namespace snmalloc
           post();
         },
         [](Allocator* a, void* p) SNMALLOC_FAST_PATH_LAMBDA {
+          // H4 hook: lazy-init recursion arm of `dealloc_remote_slow`.
+          // `check_init` had to acquire an allocator, which then re-enters
+          // `Allocator::dealloc(p)` from the top (re-firing H1).  Recording
+          // here pairs with H1 so the profile slot is drained on this frame
+          // even if the recursive path were ever replaced by one bypassing H1;
+          // idempotence is free (slot CAS + re-entrancy guard).  No-op when
+          // profiling is disabled.
+          profile::on_dealloc<Config>(p);
           // Recheck what kind of dealloc we should do in case the allocator
           // we get from lazy_init is the originating allocator.
           a->dealloc(p); // TODO don't double count statistics

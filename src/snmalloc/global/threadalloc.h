@@ -27,7 +27,14 @@
 #  endif
 #  define SNMALLOC_THREAD_TEARDOWN_DEFINED
 extern "C" int __cxa_thread_atexit_impl(void(func)(void*), void*, void*);
-extern "C" void* __dso_handle;
+// libstdc++'s <bits/c++config.h> may declare __dso_handle with C++
+// linkage (and const-qualified) when pulled in transitively via STL
+// headers from snmalloc's profile sources.  Matching that decl here
+// keeps both translation-unit and link orderings happy across gcc,
+// libstdc++, and libc++.  The `weak` attribute tolerates any
+// remaining redeclaration mismatch the linker may surface from
+// CRT-provided variants.
+__attribute__((weak)) extern void* __dso_handle;
 #endif
 
 #if defined(SNMALLOC_USE_CXX11_DESTRUCTORS)
