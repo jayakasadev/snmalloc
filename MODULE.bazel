@@ -1,6 +1,69 @@
 module(name = "snmalloc")
 
-bazel_dep(name = "rules_cc", version = "0.2.17")
-bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
-bazel_dep(name = "fuzztest", version = "20250214.0")
-bazel_dep(name = "googletest", version = "1.16.0")
+bazel_dep(name = "rules_cc", version = "0.2.19")
+# Test-only deps. Marked dev so downstream consumers (e.g. workspaces that
+# depend on @snmalloc//snmalloc-rs:snmalloc_rs) don't transitively pull
+# fuzztest/googletest + the older rules_go they drag in.
+bazel_dep(name = "fuzztest", version = "20260219.0", dev_dependency = True)
+bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
+
+# -----------------------------------------------------------------------------
+# Rust support (snmalloc-rs / snmalloc-sys).
+#
+# rules_rust provides `rust_library` and `rust_test`. The `extern "C"` decls in
+# `snmalloc-rs/snmalloc-sys/src/lib.rs` are hand-written and used as-is; the C
+# archive comes from the `cc_library` shim targets in the root `BUILD.bazel`.
+# There is no bindgen step, so no libclang or LLVM dependency.
+# -----------------------------------------------------------------------------
+bazel_dep(name = "rules_rust", version = "0.71.3")
+
+# Rust toolchain is registered for snmalloc's own dev/CI loop only.
+# Downstream consumers register their own toolchain; pulling this one in
+# transitively would conflict with their pin.
+rust = use_extension(
+    "@rules_rust//rust:extensions.bzl",
+    "rust",
+    dev_dependency = True,
+)
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.90.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+# crate_universe entries for snmalloc-rs optional dependencies:
+#   * flate2    -- Cargo feature `profiling`, for
+#                  `HeapProfile::write_pprof_gz`.
+#   * backtrace -- Cargo feature `symbolicate`, to resolve frame addresses
+#                  into function/file/line. Needed by the
+#                  `:snmalloc_rs_profiling_symbolicated` target.
+#
+# `dev_dependency = True` scopes this extension to snmalloc's own tests and CI.
+# bzlmod skips dev_dependency extensions when snmalloc is not the root module,
+# so downstream consumers never evaluate `crate.from_specs()` and never need a
+# lockfile for it (required by rules_rust >= 0.71.1).
+#
+# The cost: downstream consumers cannot see `@crates`, so they cannot build
+# `:snmalloc_rs_profiling` or `:snmalloc_rs_profiling_symbolicated` directly.
+# They should use `:snmalloc_rs_profile_compat` (see snmalloc-rs/BUILD.bazel),
+# which uses the SNMALLOC_PROFILE=ON C archive without the Rust-side deps.
+#
+# The repo is named `snmalloc_crates` rather than the default `crates` because
+# bzlmod refuses two crate universes with the same name across modules. The
+# `use_repo` call below aliases it back to `@crates` inside this module only,
+# so `@crates//:flate2` in snmalloc-rs/BUILD.bazel keeps working.
+crate = use_extension(
+    "@rules_rust//crate_universe:extensions.bzl",
+    "crate",
+    dev_dependency = True,
+)
+crate.spec(
+    package = "flate2",
+    version = "1",
+)
+crate.spec(
+    package = "backtrace",
+    version = "0.3",
+)
+crate.from_specs(name = "snmalloc_crates")
+use_repo(crate, crates = "snmalloc_crates")

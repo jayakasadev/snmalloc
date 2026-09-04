@@ -8,4 +8,7 @@ test --test_output=streamed
 build:macos --macos_minimum_os=10.15
 build:macos --no@fuzztest//fuzztest:use_riegeli
 
+# rust_test writes to stderr; show it so CI failures are diagnosable.
+test --test_output=errors
+
 try-import %workspace%/fuzztest.bazelrc
