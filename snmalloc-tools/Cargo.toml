@@ -1,0 +1,29 @@
+[package]
+name = "snmalloc-tools"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "CLI for joining perf PMU output with snmalloc allocation-site metadata."
+repository = "https://github.com/microsoft/snmalloc"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "snmalloc_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "snmalloc-tools"
+path = "src/main.rs"
+
+[dependencies]
+# Subcommand parsing.  The `derive` feature adds the proc-macro crate.
+clap = { version = "4", features = ["derive"] }
+# Parses branch_hints.json and produces the --json output.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# One error type for every subcommand, so no parser needs its own enum.
+anyhow = "1"
+# The `profiling` feature provides the alloc-site lookup.  A path dep, so
+# this crate tracks the in-tree snmalloc-rs, not the crates.io release.
+snmalloc-rs = { path = "../snmalloc-rs", features = ["profiling"] }
