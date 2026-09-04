@@ -14,6 +14,52 @@ readme = "README.md"
 
 [dependencies]
 snmalloc-sys = { version = "0.7.5", path = "snmalloc-sys", default-features = false }
+# Symbolicator for heap-profile frames.  Enabled by the `symbolicate`
+# feature only, since backtrace also pulls in addr2line, gimli, and object.
+backtrace = { version = "0.3", optional = true }
+# gzip codec for `HeapProfile::write_pprof_gz`, which writes the `.pb.gz`
+# pprof streams that Pyroscope, Polar Signals, and Speedscope expect.
+# Enabled by the `profiling` feature only, so the default build has no
+# flate2 or miniz_oxide.
+flate2 = { version = "1", optional = true }
+
+# Criterion is a dev-dependency below as well.  It is also an *optional*
+# regular dependency so the `criterion-integration` feature can enable
+# `src/criterion.rs`; Cargo features can only reference deps declared in
+# `[dependencies]` through `dep:<name>`.  With the feature off, only the
+# dev-dep applies and `src/criterion.rs` is `#[cfg]`-ed out.
+criterion = { version = "0.5", default-features = false, optional = true }
+
+# Dev-dependencies are built only for `cargo test` and `cargo bench`, and
+# never reach consumers of the published crate.  `inferno` is a Rust port of
+# Brendan Gregg's `flamegraph.pl`; `tests/profile_viewer_roundtrip.rs` uses
+# it to check that `HeapProfile::write_flamegraph` output renders in a real
+# viewer.  Pinned to 0.11: 0.12 raises `rust-version` to 1.71 and adds
+# crossbeam deps.
+[dev-dependencies]
+inferno = "0.11"
+# Benchmark harness.  `default-features = false` skips the HTML report
+# generator (and plotters, csv, rayon); bench numbers are read from
+# `target/criterion/**/estimates.json` instead.
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "profile_bench"
+harness = false
+
+# Bench for SNMALLOC_STATS=ON.  Installs SnMalloc as `#[global_allocator]`
+# so the FFI thunks holding the counters are exercised.  Run it twice, once
+# without `--features stats` and once with; compare the two.  See the bench
+# file's module doc-comment.
+[[bench]]
+name = "stats_bench"
+harness = false
+
+# Example of the `criterion-integration` feature.  With the feature off it
+# compiles to an empty `main`, so `cargo build --benches` still works.
+[[bench]]
+name = "criterion_profile_example"
+harness = false
 
 [features]
 default = ["snmalloc-sys/build_cmake", "snmalloc-sys/usewait-on-address"]
@@ -28,7 +74,15 @@ usecxx17 = ["snmalloc-sys/usecxx17"]
 check = ["snmalloc-sys/check"]
 lto = ["snmalloc-sys/lto"]
 notls = ["snmalloc-sys/notls"]
-stats = ["snmalloc-sys/stats"]
+## Tiered allocator stats; these just forward to snmalloc-sys.  See
+## `snmalloc-sys/Cargo.toml` for what each tier collects.  `stats` is an
+## alias for `stats-basic`.
+stats = ["stats-basic"]
+stats-basic = ["snmalloc-sys/stats-basic"]
+# `stats-full` also enables `stats-basic`, which gates
+# `SnMalloc::full_stats()` and the `FullAllocStats` re-exports.  Without it
+# the C++ side would compile the FULL tier but the Rust accessor would not.
+stats-full = ["stats-basic", "snmalloc-sys/stats-full"]
 usewait-on-address = ["snmalloc-sys/usewait-on-address"]
 libc-api = ["snmalloc-sys/libc-api"]
 tracing = ["snmalloc-sys/tracing"]
@@ -37,3 +91,14 @@ vendored-stl = ["snmalloc-sys/vendored-stl"]
 check-loads = ["snmalloc-sys/check-loads"]
 pageid = ["snmalloc-sys/pageid"]
 gwp-asan = ["snmalloc-sys/gwp-asan"]
+profiling = ["snmalloc-sys/profiling", "dep:flate2"]
+# Resolve frame addresses to function/file/line with `backtrace`.  Compose
+# with `profiling` for a symbolicated flamegraph.
+symbolicate = ["dep:backtrace"]
+# Runs a `criterion` bench under a `ProfilingSession` and writes a
+# folded-stack flamegraph afterwards.  Takes `criterion` as a regular
+# (non-dev) dep so downstream `[[bench]]` targets can call the helper.
+# Compose with `profiling`: on its own this does nothing, since the helper
+# needs both features and no session can start without the C-side
+# SNMALLOC_PROFILE.
+criterion-integration = ["dep:criterion"]
