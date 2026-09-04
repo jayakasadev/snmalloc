@@ -7,11 +7,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
+  # Push and pull_request triggers removed on this fork to save CI cost.
+  # Run manually from the Actions tab.
   workflow_dispatch:
 
 env:
@@ -68,6 +65,48 @@ jobs:
       run: cargo build ${{ matrix.release.flag }} --verbose ${{ matrix.features.args }}
     - name: Run tests
       run: cargo test ${{ matrix.release.flag }} --all ${{ matrix.features.args }}
+
+  # ============================================================================
+  # Heap-profiling feature build
+  #
+  # Exercises the `profiling` cargo feature, which makes snmalloc-sys pass
+  # SNMALLOC_PROFILE=ON to the C++ build. Linux and macOS only, matching
+  # where the C++ matrix covers the profile code paths.
+  # ============================================================================
+  profiling:
+    runs-on: ${{ matrix.os }}
+    name: "profiling-${{ matrix.os }}-${{ matrix.release.name }}"
+    defaults:
+      run:
+        shell: bash
+        working-directory:
+          ./snmalloc-rs
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, macos-15]
+        rust: [stable]
+        release:
+          - name: release
+            flag: "--release"
+          - name: debug
+            flag: ""
+      fail-fast: false
+    steps:
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: update dependency
+      run: |
+        if bash -c 'uname -s | grep 'Linux' >/dev/null'; then
+          sudo apt-get update -y && sudo apt-get --reinstall install -y libc6-dev
+        fi
+      shell: bash
+    - name: Build (profiling)
+      run: cargo build ${{ matrix.release.flag }} --verbose --features profiling
+    - name: Run tests (profiling)
+      run: cargo test ${{ matrix.release.flag }} --all --features profiling
 
   publish-scan:
     runs-on: ubuntu-latest

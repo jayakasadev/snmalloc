@@ -1,0 +1,51 @@
+name: Bazel build
+
+# Smoke test that the Bazel targets still build alongside the Cargo build.
+# Covers the rust_library variants and one rust_test.
+
+on:
+  # Push and pull_request triggers removed on this fork to save CI cost.
+  # Run manually from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  bazel:
+    name: bazel build + test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # bazelisk is the recommended launcher on CI: it uses the version
+      # pinned by `.bazelversion` or MODULE.bazel, not the system bazel.
+      - name: Install bazelisk
+        run: |
+          sudo curl -L -o /usr/local/bin/bazel \
+            https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          sudo chmod +x /usr/local/bin/bazel
+          bazel --version
+
+      # Caching lets later runs skip the rules_rust toolchain download
+      # (~150 MB) and the cmake action.  The key includes
+      # MODULE.bazel.lock, so any dependency bump invalidates the cache.
+      - name: Cache Bazel
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+          key: bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel.lock', 'MODULE.bazel') }}-${{ github.sha }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ hashFiles('MODULE.bazel.lock', 'MODULE.bazel') }}-
+            bazel-${{ runner.os }}-
+
+      - name: Bazel build :: snmalloc-rs Rust library (default)
+        run: bazel build //snmalloc-rs:snmalloc_rs
+
+      - name: Bazel build :: snmalloc-sys Rust library (default + profiling)
+        run: |
+          bazel build \
+            //snmalloc-rs/snmalloc-sys:snmalloc_sys \
+            //snmalloc-rs/snmalloc-sys:snmalloc_sys_profiling
+
+      - name: Bazel test :: snmalloc-rs integration tests
+        run: bazel test //snmalloc-rs:all

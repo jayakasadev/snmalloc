@@ -13,11 +13,8 @@ name: Coverage
 # exercises.
 
 on:
-  pull_request:
-    branches: [ main ]
-  schedule:
-    # Nightly at 04:00 UTC; cheapest free-runner slot.
-    - cron: '0 4 * * *'
+  # Pull_request and schedule triggers removed on this fork to save CI cost.
+  # Run manually from the Actions tab.
   workflow_dispatch:
 
 # Default token; the build does not push, comment, or modify any
