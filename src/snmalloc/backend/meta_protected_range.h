@@ -29,14 +29,15 @@ namespace snmalloc
   struct MetaProtectedRangeLocalState : BaseLocalStateConstants
   {
   private:
-    // Global range of memory
+    // This cache holds reserved, uncommitted address space.
     using GlobalR = Pipe<
       Base,
       LargeBuddyRange<
         GlobalCacheSizeBits,
         bits::BITS - 1,
         Pagemap,
-        MinSizeBits>,
+        MinSizeBits,
+        /* MANAGES_COMMITTED_MEMORY = */ false>,
       LogRange<2>,
       GlobalRange>;
 
@@ -49,9 +50,16 @@ namespace snmalloc
     // Central source of object-range, does not pass back to GlobalR as
     // that would allow flows from Objects to Meta-data, and thus UAF
     // would be able to corrupt meta-data.
+    //
+    // This cache also holds uncommitted address space.
     using CentralObjectRange = Pipe<
       GlobalR,
-      LargeBuddyRange<GlobalCacheSizeBits, bits::BITS - 1, Pagemap>,
+      LargeBuddyRange<
+        GlobalCacheSizeBits,
+        bits::BITS - 1,
+        Pagemap,
+        0,
+        /* MANAGES_COMMITTED_MEMORY = */ false>,
       LogRange<3>,
       GlobalRange,
       CommitRange<PAL>,
@@ -63,6 +71,8 @@ namespace snmalloc
     static constexpr size_t SubRangeRatioBits = 6;
 
     // Centralised source of meta-range
+    //
+    // The first cache is uncommitted; the huge-page cache is committed.
     using CentralMetaRange = Pipe<
       GlobalR,
       SubRange<PAL, SubRangeRatioBits>, // Use SubRange to introduce guard
@@ -71,7 +81,8 @@ namespace snmalloc
         GlobalCacheSizeBits,
         bits::BITS - 1,
         Pagemap,
-        page_size_bits>,
+        page_size_bits,
+        /* MANAGES_COMMITTED_MEMORY = */ false>,
       CommitRange<PAL>,
       // In case of huge pages, we don't want to give each thread its own huge
       // page, so commit in the global range.

@@ -16,8 +16,11 @@ namespace snmalloc
     {
       using ContainsParent<ParentRange>::parent;
 
-      static inline stl::Atomic<size_t> current_usage{};
-      static inline stl::Atomic<size_t> peak_usage{};
+      // One cache line each: both are touched on every successful
+      // `alloc_range`, so sharing a line would cause false sharing between
+      // threads.
+      alignas(64) static inline stl::Atomic<size_t> current_usage{};
+      alignas(64) static inline stl::Atomic<size_t> peak_usage{};
 
     public:
       static constexpr bool Aligned = ParentRange::Aligned;

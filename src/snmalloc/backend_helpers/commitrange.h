@@ -1,6 +1,7 @@
 #pragma once
 #include "../pal/pal.h"
 #include "empty_range.h"
+#include "fragstats.h"
 #include "range_helpers.h"
 
 namespace snmalloc
@@ -44,6 +45,9 @@ namespace snmalloc
             parent.dealloc_range(range, size);
             return CapPtr<void, ChunkBounds>(nullptr);
           }
+
+          // Only counted once the PAL has accepted the pages.
+          BackendFragCounters::on_commit(size);
         }
         return range;
       }
@@ -56,6 +60,9 @@ namespace snmalloc
           size,
           PAL::page_size);
         PAL::notify_not_using(base.unsafe_ptr(), size);
+        // `notify_not_using` returns void, so every call that gets here is
+        // counted as a successful release.
+        BackendFragCounters::on_decommit(size);
         parent.dealloc_range(base, size);
       }
     };

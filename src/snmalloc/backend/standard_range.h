@@ -26,14 +26,15 @@ namespace snmalloc
     size_t MinSizeBits = MinBaseSizeBits<PAL>()>
   struct StandardLocalState : BaseLocalStateConstants
   {
-    // Global range of memory, expose this so can be filled by init.
+    // Global cache of reserved, uncommitted address space.
     using GlobalR = Pipe<
       Base,
       LargeBuddyRange<
         GlobalCacheSizeBits,
         bits::BITS - 1,
         Pagemap,
-        MinSizeBits>,
+        MinSizeBits,
+        /* MANAGES_COMMITTED_MEMORY = */ false>,
       LogRange<2>,
       GlobalRange>;
 

@@ -27,13 +27,10 @@
 #  endif
 #  define SNMALLOC_THREAD_TEARDOWN_DEFINED
 extern "C" int __cxa_thread_atexit_impl(void(func)(void*), void*, void*);
-// libstdc++'s <bits/c++config.h> may declare __dso_handle with C++
-// linkage (and const-qualified) when pulled in transitively via STL
-// headers from snmalloc's profile sources.  Matching that decl here
-// keeps both translation-unit and link orderings happy across gcc,
-// libstdc++, and libc++.  The `weak` attribute tolerates any
-// remaining redeclaration mismatch the linker may surface from
-// CRT-provided variants.
+// Declared here to match libstdc++, which may already have declared
+// __dso_handle with C++ linkage via STL headers pulled in by snmalloc's
+// profile sources.  `weak` lets the linker accept whichever definition the
+// CRT provides.
 __attribute__((weak)) extern void* __dso_handle;
 #endif
 
@@ -124,6 +121,9 @@ namespace snmalloc
       times_teardown_called++;
       if (bits::is_pow2(times_teardown_called) || times_teardown_called < 128)
         alloc->flush();
+      // Must happen before the allocator goes back to the pool, where another
+      // thread may pick it up.  No-op unless a stats tier is built.
+      alloc->drain_stats_to_global();
       AllocPool<Config>::release(alloc);
       alloc = const_cast<Alloc*>(&default_alloc);
     }

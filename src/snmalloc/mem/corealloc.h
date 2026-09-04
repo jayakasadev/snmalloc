@@ -3,6 +3,7 @@
 #include "../ds/ds.h"
 #include "../ds/pool.h"
 #include "../profile/hooks.h"
+#include "alloc_stats.h"
 #include "check_init.h"
 #include "freelist.h"
 #include "metadata.h"
@@ -181,6 +182,15 @@ namespace snmalloc
      */
     Ticker<typename Config::Pal> ticker;
 
+  public:
+    // Per-thread allocator telemetry.  When no stats tier is enabled this is
+    // an empty type occupying no storage (SNMALLOC_NO_UNIQUE_ADDRESS) and its
+    // hooks inline to nothing.  All counter mutation goes through its `on_*`
+    // methods (see mem/alloc_stats.h); the allocator never touches the counter
+    // fields directly.  Read cross-thread via `snmalloc_get_full_stats`.
+    SNMALLOC_NO_UNIQUE_ADDRESS AllocStats alloc_stats{};
+
+  private:
     /**
      * The message queue needs to be accessible from other threads
      *
@@ -421,6 +431,7 @@ namespace snmalloc
     SNMALLOC_SLOW_PATH decltype(auto)
     handle_message_queue_slow(Action action, Args... args) noexcept(noexc)
     {
+      alloc_stats.on_message_queue_drain();
       bool need_post = false;
       size_t bytes_freed = 0;
       auto local_state = backend_state_ptr();
@@ -430,6 +441,7 @@ namespace snmalloc
                            };
       auto cb = [this, domesticate, &need_post, &bytes_freed](
                   capptr::Alloc<RemoteMessage> msg) SNMALLOC_FAST_PATH_LAMBDA {
+        alloc_stats.on_message_received();
         auto& entry =
           Config::Backend::get_metaentry(snmalloc::address_cast(msg));
         handle_dealloc_remote(entry, msg, need_post, domesticate, bytes_freed);
@@ -486,18 +498,18 @@ namespace snmalloc
       if (SNMALLOC_LIKELY(entry.get_remote() == public_state()))
       {
         auto meta = entry.get_slab_metadata();
-
-        // H2 hook: remote-ingest fast path.  An object freed by another thread
-        // is about to be spliced back onto the slab's local free queue, after
-        // which it is indistinguishable from a same-thread free -- so clear its
-        // profile slot here, on the destination thread, before the splice.
-        // Idempotent against the H1 clear the source thread already did (the
-        // slot CAS short-circuits on null), and the re-entrancy guard prevents
-        // transitive re-entry.
-        profile::on_dealloc<Config>(msg.unsafe_ptr());
+        // Snapshot the running byte total so the stats hook below can credit
+        // the delta this message contributes to the owning thread's per-class
+        // live counters.  Dead-eliminated when stats are disabled.
+        size_t pre_bytes = bytes_returned;
 
         auto unreturned = dealloc_local_objects_fast(
           msg, entry, meta, entropy, domesticate, bytes_returned);
+
+        // Receive-side live decrement, pairing with the cumulative-free bump
+        // the freeing thread made on its own block in `on_remote_dealloc`.
+        alloc_stats.on_remote_ingest(
+          entry.get_sizeclass(), bytes_returned - pre_bytes);
 
         /*
          * dealloc_local_objects_fast has updated the free list but not updated
@@ -656,6 +668,10 @@ namespace snmalloc
       auto* fl = &small_fast_free_lists[sizeclass];
       if (SNMALLOC_LIKELY(!fl->empty()))
       {
+        // Fast-path alloc served from the existing free list.  The alloc-count
+        // credit is batched at refill time, so only the per-class live counters
+        // move here (FULL tier only).
+        alloc_stats.on_small_alloc_fast(sizeclass);
         auto p = fl->take(key, domesticate);
         return finish_alloc<Conts>(p, size);
       }
@@ -837,6 +853,7 @@ namespace snmalloc
           laden.insert(meta);
         }
 
+        alloc_stats.on_small_refill(sizeclass);
         auto r = finish_alloc<Conts>(p, size);
         return ticker.check_tick(r);
       }
@@ -886,7 +903,11 @@ namespace snmalloc
               return capptr_domesticate<Config>(backend_state_ptr(), p);
             };
           auto [p, still_active] = BackendSlabMetadata::alloc_free_list(
-            domesticate, meta, fast_free_list, entropy, sizeclass);
+            domesticate,
+            meta,
+            fast_free_list,
+            entropy,
+            sizeclass);
 
           if (still_active)
           {
@@ -898,6 +919,7 @@ namespace snmalloc
             laden.insert(meta);
           }
 
+          alloc_stats.on_small_refill(sizeclass);
           auto r = finish_alloc<Conts>(p, size);
           return ticker.check_tick(r);
         },
@@ -1035,19 +1057,6 @@ namespace snmalloc
     template<typename CheckInit = CheckInitNoOp>
     SNMALLOC_FAST_PATH void dealloc(void* p_raw) noexcept
     {
-      // H1 hook: the waist of the dealloc API -- every public free entry point
-      // (free, ::operator delete, jemalloc-compat, Rust shims, ...) funnels
-      // through here.  Runs before the dealloc logic so profile cleanup sees
-      // the pointer still live (sizeclass / slab metadata valid), and any
-      // profile-internal dealloc is short-circuited by the re-entrancy guard.
-      // The force-inlined peek handles the common "never sampled" case with no
-      // call frame; only a non-null slot pays the full hook.  No-op when
-      // profiling is disabled.
-      if (!profile::on_dealloc_peek<Config>(p_raw))
-      {
-        profile::on_dealloc<Config>(p_raw);
-      }
-
 #ifdef __CHERI_PURE_CAPABILITY__
       /*
        * On CHERI platforms, snap the provided pointer to its base, ignoring
@@ -1065,6 +1074,12 @@ namespace snmalloc
        */
       p_raw = __builtin_cheri_offset_set(p_raw, 0);
 #endif
+
+      if (!profile::on_dealloc_peek<Config>(p_raw))
+      {
+        profile::on_dealloc<Config>(p_raw);
+      }
+
       capptr::AllocWild<void> p_wild =
         capptr_from_client(const_cast<void*>(p_raw));
       auto p_tame = capptr_domesticate<Config>(backend_state_ptr(), p_wild);
@@ -1085,11 +1100,20 @@ namespace snmalloc
        */
       if (SNMALLOC_LIKELY(public_state() == entry.get_remote()))
       {
+        // Local-owner dealloc fast path: this thread owns the slab, so both
+        // the cumulative-free and live counters move here (the fast_path alloc/
+        // dealloc credit was batched at refill time).
+        alloc_stats.on_local_dealloc(entry.get_sizeclass());
         dealloc_cheri_checks(p_tame.unsafe_ptr());
         dealloc_local_object(p_tame, entry);
         return;
       }
 
+      // Cross-allocator dealloc: another thread owns the slab, so this is
+      // routed through the remote dealloc cache.  The cumulative-free count is
+      // credited on this (freeing) thread; the paired live decrement happens on
+      // the owning thread when it ingests the message (`on_remote_ingest`).
+      alloc_stats.on_remote_dealloc(entry.get_sizeclass());
       dealloc_remote<CheckInit>(entry, p_tame);
     }
 
@@ -1370,13 +1394,6 @@ namespace snmalloc
       }
 
       dealloc_cheri_checks(p_tame.unsafe_ptr());
-      // H3 hook: SecondaryAllocator escape hatch.  This pointer was not
-      // allocated by an snmalloc front-end (GWP-ASan guard page, sandboxed
-      // secondary pool, ...) so it has no profile slot.  H1 already fired on it
-      // above; re-firing here is idempotent (slot CAS + re-entrancy guard) and
-      // is a defensive belt-and-braces should a future path ever reach H3
-      // without traversing H1.  No-op when profiling is disabled.
-      profile::on_dealloc<Config>(p_tame.unsafe_ptr());
       Config::SecondaryAllocator::deallocate(p_tame.unsafe_ptr());
     }
 
@@ -1408,14 +1425,6 @@ namespace snmalloc
           post();
         },
         [](Allocator* a, void* p) SNMALLOC_FAST_PATH_LAMBDA {
-          // H4 hook: lazy-init recursion arm of `dealloc_remote_slow`.
-          // `check_init` had to acquire an allocator, which then re-enters
-          // `Allocator::dealloc(p)` from the top (re-firing H1).  Recording
-          // here pairs with H1 so the profile slot is drained on this frame
-          // even if the recursive path were ever replaced by one bypassing H1;
-          // idempotence is free (slot CAS + re-entrancy guard).  No-op when
-          // profiling is disabled.
-          profile::on_dealloc<Config>(p);
           // Recheck what kind of dealloc we should do in case the allocator
           // we get from lazy_init is the originating allocator.
           a->dealloc(p); // TODO don't double count statistics
@@ -1503,6 +1512,18 @@ namespace snmalloc
       remote_dealloc_cache.capacity = 0;
 
       return posted;
+    }
+
+  public:
+    // Drain this thread's telemetry counters into the process-global
+    // aggregators and reset the local block.  Called from
+    // `ThreadAlloc::teardown` after the allocator is about to be released back
+    // to the pool, so the next thread to acquire it starts clean.  Not called
+    // from `flush()`, which also runs on live threads and would erase counters
+    // mid-lifetime.  No-op when no stats tier is enabled.
+    void drain_stats_to_global() noexcept
+    {
+      alloc_stats.drain_to_global();
     }
 
     /**
