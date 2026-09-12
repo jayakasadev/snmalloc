@@ -3,6 +3,12 @@
 #include "../mem/mem.h"
 #include "threadalloc.h"
 
+#ifdef SNMALLOC_PROFILE
+// Re-included so any translation unit instantiating a wrapper below has the
+// hook template definitions available.
+#  include "../profile/record.h"
+#endif
+
 namespace snmalloc
 {
   template<SNMALLOC_CONCEPT(IsConfig) Config_ = Config>
@@ -303,14 +309,28 @@ namespace snmalloc
   }
 
   template<SNMALLOC_CONCEPT(IsConfig) Config_ = Config>
+  SNMALLOC_FAST_PATH_INLINE bool secondary_owns(const void* p)
+  {
+    if constexpr (Config_::SecondaryAllocator::pass_through)
+    {
+      UNUSED(p);
+      return false;
+    }
+    else
+    {
+      return p != nullptr && Config_::SecondaryAllocator::owns(p);
+    }
+  }
+
+  template<SNMALLOC_CONCEPT(IsConfig) Config_ = Config>
   SNMALLOC_FAST_PATH_INLINE size_t alloc_size(const void* p_raw)
   {
     const auto& entry = Config_::Backend::get_metaentry(address_cast(p_raw));
 
     if (SNMALLOC_UNLIKELY(
-          !Config::SecondaryAllocator::pass_through && !entry.is_owned() &&
+          !Config_::SecondaryAllocator::pass_through && !entry.is_owned() &&
           p_raw != nullptr))
-      return Config::SecondaryAllocator::alloc_size(p_raw);
+      return Config_::SecondaryAllocator::alloc_size(p_raw);
     // TODO What's the domestication policy here?  At the moment we just
     // probe the pagemap with the raw address, without checks.  There could
     // be implicit domestication through the `Config::Pagemap` or
@@ -331,24 +351,33 @@ namespace snmalloc
   SNMALLOC_FAST_PATH_INLINE void* alloc()
   {
     constexpr size_t sz = aligned_size(align, size);
+    profile::prepare_alloc<Config>(sz, sz);
+    void* p;
     if constexpr (is_small_sizeclass(sz))
     {
       constexpr auto sc = size_to_sizeclass_const(sz);
-      return ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(
-        sc);
+      p = ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(sc);
     }
     else
     {
-      return ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(
-        sz);
+      p = ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(sz);
     }
+    // Every public alloc entry point runs through one of the wrappers in this
+    // file, so a hook per wrapper covers them all. It runs after the inner
+    // alloc so `p` and its pagemap entry are valid. No-op when profiling is
+    // disabled.
+    profile::on_alloc<Config>(p, sz, sz);
+    return p;
   }
 
   template<typename Conts = Uninit, size_t align = 1>
   SNMALLOC_FAST_PATH_INLINE void* alloc(size_t size)
   {
-    return ThreadAlloc::get().alloc<Conts, ThreadAlloc::CheckInit>(
-      aligned_size(align, size));
+    const size_t sz = aligned_size(align, size);
+    profile::prepare_alloc<Config>(size, sz);
+    void* p = ThreadAlloc::get().alloc<Conts, ThreadAlloc::CheckInit>(sz);
+    profile::on_alloc<Config>(p, size, sz);
+    return p;
   }
 
   /**
@@ -358,15 +387,22 @@ namespace snmalloc
   template<typename Conts = Uninit>
   SNMALLOC_FAST_PATH_INLINE void* alloc(smallsizeclass_t sizeclass)
   {
-    return ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(
+    const size_t sz = sizeclass_to_size(sizeclass);
+    profile::prepare_alloc<Config>(sz, sz);
+    void* p = ThreadAlloc::get().template alloc<Conts, ThreadAlloc::CheckInit>(
       sizeclass);
+    profile::on_alloc<Config>(p, sz, sz);
+    return p;
   }
 
   template<typename Conts = Uninit>
   SNMALLOC_FAST_PATH_INLINE void* alloc_aligned(size_t align, size_t size)
   {
-    return ThreadAlloc::get().alloc<Conts, ThreadAlloc::CheckInit>(
-      aligned_size(align, size));
+    const size_t sz = aligned_size(align, size);
+    profile::prepare_alloc<Config>(size, sz);
+    void* p = ThreadAlloc::get().alloc<Conts, ThreadAlloc::CheckInit>(sz);
+    profile::on_alloc<Config>(p, size, sz);
+    return p;
   }
 
   SNMALLOC_API void dealloc(void* p)

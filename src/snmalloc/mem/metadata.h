@@ -416,7 +416,14 @@ namespace snmalloc
     /**
      *  Data-structure for building the free list for this slab.
      */
-    SNMALLOC_NO_UNIQUE_ADDRESS freelist::Builder<mitigations(random_preserve)>
+    SNMALLOC_NO_UNIQUE_ADDRESS freelist::Builder<
+      mitigations(random_preserve),
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+      true
+#else
+      mitigations(random_preserve)
+#endif
+      >
       free_queue;
 
     /**
@@ -624,13 +631,25 @@ namespace snmalloc
     /**
      * Allocates a free list from the meta data.
      *
-     * Returns a freshly allocated object of the correct size, and a bool that
+     * Returns a freshly allocated object of the correct size, a bool that
      * specifies if the slab metadata should be placed in the queue for that
-     * sizeclass.
+     * sizeclass, and an upper-bound refill count (the number of objects
+     * transferred to `fast_free_list`, including the popped return value).
      *
-     * If Randomisation is not used, it will always return false for the second
-     * component, but with randomisation, it may only return part of the
-     * available objects for this slab metadata.
+     * The refill count is `sizeclass_to_slab_object_count(sizeclass) -
+     * remaining`. This is exact for freshly-built slabs (where the builder
+     * was populated with `slab_object_count` objects via `alloc_new_list`),
+     * and an upper bound when the slab is reused from the per-sizeclass
+     * stash (a recycled slab may have had fewer than `slab_object_count`
+     * entries enqueued). The overshoot is bounded by the slab object count
+     * (at most ~256 for the smallest sizeclasses) and is consumed by the
+     * batched `fast_path_allocs` pre-credit, which permits a bounded
+     * stale-ahead reading for observability.
+     *
+     * If Randomisation is not used, the second component will always be
+     * false (the closed list contains everything in the builder), but with
+     * randomisation, it may only return part of the available objects for
+     * this slab metadata.
      */
     template<typename Domesticator>
     static SNMALLOC_FAST_PATH stl::Pair<freelist::HeadPtr, bool>
@@ -663,6 +682,47 @@ namespace snmalloc
 
       return {p, !sleeping};
     }
+
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+    /**
+     * Prefix-limited refill used by experimental refill sampling.
+     *
+     * `max_transfer` includes the object returned immediately and the objects
+     * left on `fast_free_list`. `transferred` is therefore the exact debit to
+     * the sampler. Surplus remains signed and reachable in `free_queue`.
+     *
+     * `free_queue` tracks length in this config, so `count()` is available
+     * even when the stats tiers are off.
+     */
+    template<typename Domesticator>
+    static SNMALLOC_FAST_PATH stl::Pair<freelist::HeadPtr, bool>
+    alloc_free_list(
+      Domesticator domesticate,
+      FrontendSlabMetadata* meta,
+      freelist::Iter<>& fast_free_list,
+      LocalEntropy& entropy,
+      smallsizeclass_t sizeclass,
+      uint16_t max_transfer,
+      uint16_t& transferred)
+    {
+      auto& key = freelist::Object::key_root;
+      stl::remove_reference_t<decltype(fast_free_list)> tmp_fl;
+      const uint16_t before = meta->free_queue.count();
+      auto remaining = meta->free_queue.close_prefix(
+        tmp_fl, key, meta->as_key_tweak(), max_transfer, domesticate);
+      transferred = before - remaining;
+      auto p = tmp_fl.take(key, domesticate);
+      fast_free_list = tmp_fl;
+
+      if constexpr (mitigations(random_preserve))
+        entropy.refresh_bits();
+      else
+        UNUSED(entropy);
+
+      auto sleeping = meta->set_sleeping(sizeclass, remaining);
+      return {p, !sleeping};
+    }
+#endif
 
     // Returns a pointer to somewhere in the slab. May not be the
     // start of the slab.

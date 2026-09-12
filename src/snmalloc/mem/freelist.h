@@ -787,6 +787,15 @@ namespace snmalloc
         return true;
       }
 
+      template<bool TRACK_LENGTH_ = TRACK_LENGTH>
+      stl::enable_if_t<TRACK_LENGTH_, uint16_t> count() const
+      {
+        uint16_t result = length[0];
+        if constexpr (RANDOM)
+          result += length[1];
+        return result;
+      }
+
       /**
        * Adds an element to the builder
        */
@@ -901,15 +910,72 @@ namespace snmalloc
 
         end[i] = &head[i];
 
+        if constexpr (TRACK_LENGTH)
+          length[i] = 0;
+
         if constexpr (RANDOM)
         {
-          length[i] = 0;
           return length[1 - i];
         }
         else
         {
           return 0;
         }
+      }
+
+      /**
+       * Close at most `max_length` entries into `fl`, retaining every surplus
+       * entry in this builder.  TRACK_LENGTH is required because a partial
+       * close must update both the selected queue and the total remaining
+       * count exactly.
+       */
+      template<typename Domesticator>
+      SNMALLOC_FAST_PATH uint16_t close_prefix(
+        Iter<BView, BQueue>& fl,
+        const FreeListKey& key,
+        address_t key_tweak,
+        uint16_t max_length,
+        Domesticator domesticate)
+      {
+        static_assert(TRACK_LENGTH, "close_prefix requires TRACK_LENGTH");
+        SNMALLOC_ASSERT(max_length != 0);
+
+        uint32_t i;
+        if constexpr (RANDOM)
+          i = length[0] > length[1] ? 0 : 1;
+        else
+          i = 0;
+
+        const uint16_t take = max_length < length[i] ? max_length : length[i];
+        SNMALLOC_ASSERT(take != 0);
+        if (take == length[i])
+          return close(fl, key, key_tweak);
+
+        auto first = read_head(i, key, key_tweak);
+        auto last = first;
+        for (uint16_t n = 1; n < take; n++)
+          last = last->read_next(key, key_tweak, domesticate);
+
+        auto remainder = last->read_next(key, key_tweak, domesticate);
+        Object::store_null(&last->next_object, key, key_tweak);
+        Object::store_nextish(
+          reinterpret_cast<Object::BQueuePtr<BQueue>*>(&head[i]),
+          remainder,
+          key,
+          key_tweak,
+          remainder);
+
+        fl = {
+          first,
+          signed_prev(
+            address_cast(&head[i]), address_cast(first), key, key_tweak),
+          key_tweak};
+        length[i] -= take;
+
+        uint16_t remaining = length[i];
+        if constexpr (RANDOM)
+          remaining += length[1 - i];
+        return remaining;
       }
 
       /**

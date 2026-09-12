@@ -43,5 +43,11 @@ namespace snmalloc
         "secondary alloc_size should never be invoked with default setup");
       return 0;
     }
+
+    SNMALLOC_FAST_PATH
+    static bool owns(const void*)
+    {
+      return false;
+    }
   };
 } // namespace snmalloc

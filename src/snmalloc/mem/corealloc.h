@@ -2,6 +2,11 @@
 
 #include "../ds/ds.h"
 #include "../ds/pool.h"
+#include "../profile/hooks.h"
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+#  include "../profile/spike_freelist_trim.h"
+#endif
+#include "alloc_stats.h"
 #include "check_init.h"
 #include "freelist.h"
 #include "metadata.h"
@@ -180,6 +185,15 @@ namespace snmalloc
      */
     Ticker<typename Config::Pal> ticker;
 
+  public:
+    // Per-thread allocator telemetry.  When no stats tier is enabled this is
+    // an empty type occupying no storage (SNMALLOC_NO_UNIQUE_ADDRESS) and its
+    // hooks inline to nothing.  All counter mutation goes through its `on_*`
+    // methods (see mem/alloc_stats.h); the allocator never touches the counter
+    // fields directly.  Read cross-thread via `snmalloc_get_full_stats`.
+    SNMALLOC_NO_UNIQUE_ADDRESS AllocStats alloc_stats{};
+
+  private:
     /**
      * The message queue needs to be accessible from other threads
      *
@@ -295,7 +309,7 @@ namespace snmalloc
     }
 
     friend class ThreadAlloc;
-    constexpr Allocator(bool){};
+    constexpr Allocator(bool) {};
 
   public:
     /**
@@ -420,6 +434,7 @@ namespace snmalloc
     SNMALLOC_SLOW_PATH decltype(auto)
     handle_message_queue_slow(Action action, Args... args) noexcept(noexc)
     {
+      alloc_stats.on_message_queue_drain();
       bool need_post = false;
       size_t bytes_freed = 0;
       auto local_state = backend_state_ptr();
@@ -429,6 +444,7 @@ namespace snmalloc
                            };
       auto cb = [this, domesticate, &need_post, &bytes_freed](
                   capptr::Alloc<RemoteMessage> msg) SNMALLOC_FAST_PATH_LAMBDA {
+        alloc_stats.on_message_received();
         auto& entry =
           Config::Backend::get_metaentry(snmalloc::address_cast(msg));
         handle_dealloc_remote(entry, msg, need_post, domesticate, bytes_freed);
@@ -485,9 +501,18 @@ namespace snmalloc
       if (SNMALLOC_LIKELY(entry.get_remote() == public_state()))
       {
         auto meta = entry.get_slab_metadata();
+        // Snapshot the running byte total so the stats hook below can credit
+        // the delta this message contributes to the owning thread's per-class
+        // live counters.  Dead-eliminated when stats are disabled.
+        size_t pre_bytes = bytes_returned;
 
         auto unreturned = dealloc_local_objects_fast(
           msg, entry, meta, entropy, domesticate, bytes_returned);
+
+        // Receive-side live decrement, pairing with the cumulative-free bump
+        // the freeing thread made on its own block in `on_remote_dealloc`.
+        alloc_stats.on_remote_ingest(
+          entry.get_sizeclass(), bytes_returned - pre_bytes);
 
         /*
          * dealloc_local_objects_fast has updated the free list but not updated
@@ -637,6 +662,21 @@ namespace snmalloc
       smallsizeclass_t sizeclass,
       size_t size) noexcept(noexcept(Conts::failure(0)))
     {
+#if defined(SNMALLOC_PROFILE_SECONDARY_STORAGE) && \
+  !defined(SNMALLOC_PROFILE_REFILL_SAMPLING)
+      if (
+        void* secondary = Config::SecondaryAllocator::allocate(
+          [size]() -> stl::Pair<size_t, size_t> {
+            return {size, natural_alignment(size)};
+          }))
+      {
+        secondary = Conts::success(secondary, size, true);
+        return CheckInit::check_init(
+          [secondary]() { return secondary; },
+          [](Allocator*, void* result) { return result; },
+          secondary);
+      }
+#endif
       auto domesticate =
         [this](freelist::QueuePtr p) SNMALLOC_FAST_PATH_LAMBDA {
           return capptr_domesticate<Config>(backend_state_ptr(), p);
@@ -646,6 +686,10 @@ namespace snmalloc
       auto* fl = &small_fast_free_lists[sizeclass];
       if (SNMALLOC_LIKELY(!fl->empty()))
       {
+        // Fast-path alloc served from the existing free list.  The alloc-count
+        // credit is batched at refill time, so only the per-class live counters
+        // move here (FULL tier only).
+        alloc_stats.on_small_alloc_fast(sizeclass);
         auto p = fl->take(key, domesticate);
         return finish_alloc<Conts>(p, size);
       }
@@ -708,13 +752,22 @@ namespace snmalloc
                 return Conts::failure(size);
               }
 
-              // Check if secondary allocator wants to offer the memory
+          // Check if secondary allocator wants to offer the memory
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+              (void)profile::spike::refill_sampler.prepare_large_sample(
+                size, round_size(size));
+#endif
               void* result = Config::SecondaryAllocator::allocate(
                 [size]() -> stl::Pair<size_t, size_t> {
                   return {size, natural_alignment(size)};
                 });
               if (result != nullptr)
               {
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+                profile::cancel_prepared_alloc(
+                  profile::spike::refill_sampler.take_main_sample());
+#endif
                 return Conts::success(result, size, true);
               }
 
@@ -748,9 +801,22 @@ namespace snmalloc
                 // `success`.
                 auto p = capptr_reveal(
                   capptr_chunk_is_alloc(capptr_to_user_address_control(chunk)));
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+                profile::finalize_prepared_alloc<Config>(
+                  p,
+                  size,
+                  round_size(size),
+                  profile::spike::refill_sampler.take_main_sample());
+#endif
                 return Conts::success(p, size);
               }
 
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+              profile::cancel_prepared_alloc(
+                profile::spike::refill_sampler.take_main_sample());
+#endif
               return Conts::failure(size);
             },
             [](Allocator* a, size_t size) SNMALLOC_FAST_PATH_LAMBDA {
@@ -763,11 +829,26 @@ namespace snmalloc
     }
 
     template<typename Conts, typename CheckInit>
-    SNMALLOC_FAST_PATH void* small_refill(
-      smallsizeclass_t sizeclass,
-      freelist::Iter<>& fast_free_list,
-      size_t size) noexcept(noexcept(Conts::failure(0)))
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+    SNMALLOC_SLOW_PATH
+#else
+    SNMALLOC_FAST_PATH
+#endif
+      void* small_refill(
+        smallsizeclass_t sizeclass,
+        freelist::Iter<>& fast_free_list,
+        size_t size) noexcept(noexcept(Conts::failure(0)))
     {
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+#  ifdef SNMALLOC_PROFILE_SECONDARY_STORAGE
+      (void)profile::spike::refill_sampler.prepare_small_sample(
+        sizeclass, sizeclass_to_size(sizeclass));
+#  else
+      auto* prepared_sample =
+        profile::spike::refill_sampler.prepare_small_sample(
+          sizeclass, sizeclass_to_size(sizeclass));
+#  endif
+#endif
       void* result = Config::SecondaryAllocator::allocate(
         [size]() -> stl::Pair<size_t, size_t> {
           return {size, natural_alignment(size)};
@@ -775,6 +856,11 @@ namespace snmalloc
 
       if (result != nullptr)
       {
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+        profile::cancel_prepared_alloc(
+          profile::spike::refill_sampler.take_main_sample());
+#endif
         result = Conts::success(result, size, true);
 
         // We need to check for initialisation here in the case where
@@ -799,7 +885,15 @@ namespace snmalloc
           {
             if (entropy.next_bit() == 0)
               return small_refill_slow<Conts, CheckInit>(
-                sizeclass, fast_free_list, size);
+                sizeclass,
+                fast_free_list,
+                size
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+                ,
+                prepared_sample
+#endif
+              );
           }
         }
 
@@ -814,8 +908,32 @@ namespace snmalloc
           [this](freelist::QueuePtr p) SNMALLOC_FAST_PATH_LAMBDA {
             return capptr_domesticate<Config>(backend_state_ptr(), p);
           };
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+        size_t limit = profile::spike::refill_sampler.transfer_limit(
+          sizeclass, sizeclass_to_size(sizeclass));
+#  ifdef SNMALLOC_PROFILE_SECONDARY_STORAGE
+        const size_t sample_count = 0;
+#  else
+        const size_t sample_count = prepared_sample == nullptr ? 0 : 1;
+#  endif
+        SNMALLOC_ASSERT(limit != 0 || sample_count != 0);
+        uint16_t transferred = 0;
+        auto [p, still_active] = BackendSlabMetadata::alloc_free_list(
+          domesticate,
+          meta,
+          fast_free_list,
+          entropy,
+          sizeclass,
+          static_cast<uint16_t>(
+            (limit + sample_count) < UINT16_MAX ? (limit + sample_count) :
+                                                  UINT16_MAX),
+          transferred);
+        profile::spike::refill_sampler.debit(
+          sizeclass, sizeclass_to_size(sizeclass), transferred - sample_count);
+#else
         auto [p, still_active] = BackendSlabMetadata::alloc_free_list(
           domesticate, meta, fast_free_list, entropy, sizeclass);
+#endif
 
         if (still_active)
         {
@@ -827,21 +945,53 @@ namespace snmalloc
           laden.insert(meta);
         }
 
+        alloc_stats.on_small_refill(sizeclass);
         auto r = finish_alloc<Conts>(p, size);
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+        profile::finalize_prepared_alloc<Config>(
+          r,
+          size,
+          sizeclass_to_size(sizeclass),
+          profile::spike::refill_sampler.take_main_sample());
+#endif
         return ticker.check_tick(r);
       }
       return small_refill_slow<Conts, CheckInit>(
-        sizeclass, fast_free_list, size);
+        sizeclass,
+        fast_free_list,
+        size
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+        ,
+        prepared_sample
+#endif
+      );
     }
 
     template<typename Conts, typename CheckInit>
     SNMALLOC_SLOW_PATH void* small_refill_slow(
       smallsizeclass_t sizeclass,
       freelist::Iter<>& fast_free_list,
-      size_t size) noexcept(noexcept(Conts::failure(0)))
+      size_t size
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+      ,
+      profile::SampledAlloc* prepared_sample
+#endif
+      ) noexcept(noexcept(Conts::failure(0)))
     {
       return CheckInit::check_init(
-        [this, size, sizeclass, &fast_free_list]() SNMALLOC_FAST_PATH_LAMBDA {
+        [this,
+         size,
+         sizeclass,
+         &fast_free_list
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+         ,
+         prepared_sample
+#endif
+      ]() SNMALLOC_FAST_PATH_LAMBDA {
           size_t rsize = sizeclass_to_size(sizeclass);
 
           // No existing free list get a new slab.
@@ -861,6 +1011,11 @@ namespace snmalloc
 
           if (slab == nullptr)
           {
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+            profile::cancel_prepared_alloc(
+              profile::spike::refill_sampler.take_main_sample());
+#endif
             return Conts::failure(sizeclass_to_size(sizeclass));
           }
 
@@ -875,8 +1030,32 @@ namespace snmalloc
             [this](freelist::QueuePtr p) SNMALLOC_FAST_PATH_LAMBDA {
               return capptr_domesticate<Config>(backend_state_ptr(), p);
             };
+#ifdef SNMALLOC_PROFILE_REFILL_SAMPLING
+          size_t limit =
+            profile::spike::refill_sampler.transfer_limit(sizeclass, rsize);
+#  ifdef SNMALLOC_PROFILE_SECONDARY_STORAGE
+          const size_t sample_count = 0;
+#  else
+          const size_t sample_count = prepared_sample == nullptr ? 0 : 1;
+#  endif
+          SNMALLOC_ASSERT(limit != 0 || sample_count != 0);
+          uint16_t transferred = 0;
+          auto [p, still_active] = BackendSlabMetadata::alloc_free_list(
+            domesticate,
+            meta,
+            fast_free_list,
+            entropy,
+            sizeclass,
+            static_cast<uint16_t>(
+              (limit + sample_count) < UINT16_MAX ? (limit + sample_count) :
+                                                    UINT16_MAX),
+            transferred);
+          profile::spike::refill_sampler.debit(
+            sizeclass, rsize, transferred - sample_count);
+#else
           auto [p, still_active] = BackendSlabMetadata::alloc_free_list(
             domesticate, meta, fast_free_list, entropy, sizeclass);
+#endif
 
           if (still_active)
           {
@@ -888,7 +1067,13 @@ namespace snmalloc
             laden.insert(meta);
           }
 
+          alloc_stats.on_small_refill(sizeclass);
           auto r = finish_alloc<Conts>(p, size);
+#if defined(SNMALLOC_PROFILE_REFILL_SAMPLING) && \
+  !defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+          profile::finalize_prepared_alloc<Config>(
+            r, size, rsize, profile::spike::refill_sampler.take_main_sample());
+#endif
           return ticker.check_tick(r);
         },
         [](Allocator* a, size_t size) SNMALLOC_FAST_PATH_LAMBDA {
@@ -1042,11 +1227,13 @@ namespace snmalloc
        */
       p_raw = __builtin_cheri_offset_set(p_raw, 0);
 #endif
+
       capptr::AllocWild<void> p_wild =
         capptr_from_client(const_cast<void*>(p_raw));
       auto p_tame = capptr_domesticate<Config>(backend_state_ptr(), p_wild);
       const PagemapEntry& entry =
         Config::Backend::get_metaentry(address_cast(p_tame));
+      profile::on_dealloc<Config>(p_tame.unsafe_ptr(), entry);
 
       /*
        * p_tame may be nullptr, even if p_raw/p_wild are not, in the case
@@ -1062,11 +1249,20 @@ namespace snmalloc
        */
       if (SNMALLOC_LIKELY(public_state() == entry.get_remote()))
       {
+        // Local-owner dealloc fast path: this thread owns the slab, so both
+        // the cumulative-free and live counters move here (the fast_path alloc/
+        // dealloc credit was batched at refill time).
+        alloc_stats.on_local_dealloc(entry.get_sizeclass());
         dealloc_cheri_checks(p_tame.unsafe_ptr());
         dealloc_local_object(p_tame, entry);
         return;
       }
 
+      // Cross-allocator dealloc: another thread owns the slab, so this is
+      // routed through the remote dealloc cache.  The cumulative-free count is
+      // credited on this (freeing) thread; the paired live decrement happens on
+      // the owning thread when it ingests the message (`on_remote_ingest`).
+      alloc_stats.on_remote_dealloc(entry.get_sizeclass());
       dealloc_remote<CheckInit>(entry, p_tame);
     }
 
@@ -1465,6 +1661,18 @@ namespace snmalloc
       remote_dealloc_cache.capacity = 0;
 
       return posted;
+    }
+
+  public:
+    // Drain this thread's telemetry counters into the process-global
+    // aggregators and reset the local block.  Called from
+    // `ThreadAlloc::teardown` after the allocator is about to be released back
+    // to the pool, so the next thread to acquire it starts clean.  Not called
+    // from `flush()`, which also runs on live threads and would erase counters
+    // mid-lifetime.  No-op when no stats tier is enabled.
+    void drain_stats_to_global() noexcept
+    {
+      alloc_stats.drain_to_global();
     }
 
     /**

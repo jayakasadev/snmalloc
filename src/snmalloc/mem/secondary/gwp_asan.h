@@ -67,5 +67,11 @@ namespace snmalloc
     {
       return singleton.getSize(pointer);
     }
+
+    SNMALLOC_FAST_PATH
+    static bool owns(const void* pointer)
+    {
+      return singleton.pointerIsMine(pointer);
+    }
   };
 } // namespace snmalloc
