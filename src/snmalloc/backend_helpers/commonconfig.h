@@ -103,6 +103,111 @@ namespace snmalloc
   };
 
   /**
+   * Lazy variant of `ArrayClientMetaDataProvider<T>`.
+   *
+   * Every slab pays one `stl::Atomic<T*>`; the `slab_object_count *
+   * sizeof(T)` array behind it is only allocated the first time that slab is
+   * touched. Intended for metadata that most slabs never need, such as
+   * heap-profiling samples.
+   *
+   * Installation goes straight to the platform layer, never through the
+   * frontend allocator, so it cannot recurse into user `malloc`. Two threads
+   * touching a slab at once are resolved by compare-and-swap, with the loser
+   * decommitting its mapping. There is no portable `Pal::release`, so the
+   * virtual reservation is held for the life of the slab.
+   */
+  template<typename T>
+  struct LazyArrayClientMetaDataProvider
+  {
+    /**
+     * Per-slab storage: a pointer to the backing array, null until it is
+     * installed. The object count is not cached here; it comes from the
+     * pagemap sizeclass and is passed to `get`.
+     */
+    struct StorageType
+    {
+      stl::Atomic<T*> backing{nullptr};
+    };
+
+    static_assert(
+      sizeof(StorageType) == sizeof(void*),
+      "LazyArrayClientMetaDataProvider::StorageType must be exactly one "
+      "pointer wide");
+
+    using DataRef = T&;
+
+    /**
+     * One pointer per slab, whatever the slab's object count.
+     */
+    static constexpr size_t required_count(size_t /*max_count*/)
+    {
+      return 1;
+    }
+
+    /**
+     * `notify_using` needs a page-aligned base and length when zeroing. Both
+     * it and the matching decommit use this rounded size, so the two stay
+     * balanced.
+     */
+    static constexpr size_t round_to_page(size_t bytes)
+    {
+      return bits::align_up(bytes, DefaultPal::page_size);
+    }
+
+    /**
+     * Install a zeroed backing array for this slab and publish it, or
+     * return the pointer of whichever thread got there first. Returns
+     * nullptr if the platform could not give us the memory.
+     */
+    SNMALLOC_SLOW_PATH static T*
+    install(StorageType* base, size_t slab_object_count)
+    {
+      const size_t raw_bytes = slab_object_count * sizeof(T);
+      const size_t alloc_bytes = round_to_page(raw_bytes);
+
+      void* p = DefaultPal::reserve(alloc_bytes);
+      if (SNMALLOC_UNLIKELY(p == nullptr))
+        return nullptr;
+
+      // YesZero so every slot reads as zero; on Windows this also commits
+      // the pages.
+      if (SNMALLOC_UNLIKELY(
+            !DefaultPal::template notify_using<YesZero>(p, alloc_bytes)))
+        return nullptr;
+
+      auto* fresh = static_cast<T*>(p);
+      T* expected = nullptr;
+      if (base->backing.compare_exchange_strong(
+            expected,
+            fresh,
+            stl::memory_order_acq_rel,
+            stl::memory_order_acquire))
+      {
+        return fresh;
+      }
+
+      // Lost the race: hand our pages back and use the winner's array. The
+      // virtual reservation itself is leaked.
+      DefaultPal::notify_not_using(p, alloc_bytes);
+      return expected;
+    }
+
+    /**
+     * `slab_object_count` sizes the backing array on first touch; callers
+     * get it from the pagemap sizeclass. The extra argument means this
+     * signature is not interchangeable with the other providers' `get`.
+     */
+    static DataRef
+    get(StorageType* base, size_t index, size_t slab_object_count)
+    {
+      T* buf = base->backing.load(stl::memory_order_acquire);
+      if (SNMALLOC_UNLIKELY(buf == nullptr))
+        buf = install(base, slab_object_count);
+      return buf[index];
+    }
+  };
+
+  /**
    * Class containing definitions that are likely to be used by all except for
    * the most unusual back-end implementations.  This can be subclassed as a
    * convenience for back-end implementers, but is not required.

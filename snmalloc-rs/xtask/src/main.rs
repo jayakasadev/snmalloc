@@ -1,6 +1,6 @@
-use xshell::{cmd, Shell};
 use clap::{Parser, Subcommand};
 use regex::Regex;
+use xshell::{cmd, Shell};
 
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
 
 fn compare_builds() -> anyhow::Result<()> {
     let sh = Shell::new()?;
-    
+
     println!("=== Benchmarking build_cc (WaitOnAddress enabled) ===");
     // Clean to ensure rebuild
     cmd!(sh, "cargo clean -p snmalloc-sys").run()?;
@@ -45,7 +45,7 @@ fn compare_builds() -> anyhow::Result<()> {
     println!("\n=== Results Comparison ===");
     println!("build_cc Throughput:    {:.2} Mops/sec", cc_throughput);
     println!("build_cmake Throughput: {:.2} Mops/sec", cmake_throughput);
-    
+
     let diff = (cc_throughput - cmake_throughput) / cmake_throughput * 100.0;
     println!("Difference:             {:.2}%", diff);
 

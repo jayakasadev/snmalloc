@@ -18,9 +18,9 @@ namespace snmalloc
    */
   template<typename Rep>
   concept RBRepTypes = requires() {
-                         typename Rep::Handle;
-                         typename Rep::Contents;
-                       };
+    typename Rep::Handle;
+    typename Rep::Contents;
+  };
 
   /**
    * The representation must define operations on the holder and contents
@@ -41,29 +41,17 @@ namespace snmalloc
   template<typename Rep>
   concept RBRepMethods =
     requires(typename Rep::Handle hp, typename Rep::Contents k, bool b) {
-      {
-        Rep::get(hp)
-        } -> ConceptSame<typename Rep::Contents>;
-      {
-        Rep::set(hp, k)
-        } -> ConceptSame<void>;
-      {
-        Rep::is_red(k)
-        } -> ConceptSame<bool>;
-      {
-        Rep::set_red(k, b)
-        } -> ConceptSame<void>;
-      {
-        Rep::ref(b, k)
-        } -> ConceptSame<typename Rep::Handle>;
-      {
-        Rep::null
-        } -> ConceptSameModRef<const typename Rep::Contents>;
+      { Rep::get(hp) } -> ConceptSame<typename Rep::Contents>;
+      { Rep::set(hp, k) } -> ConceptSame<void>;
+      { Rep::is_red(k) } -> ConceptSame<bool>;
+      { Rep::set_red(k, b) } -> ConceptSame<void>;
+      { Rep::ref(b, k) } -> ConceptSame<typename Rep::Handle>;
+      { Rep::null } -> ConceptSameModRef<const typename Rep::Contents>;
       {
         typename Rep::Handle{const_cast<
           stl::remove_const_t<stl::remove_reference_t<decltype(Rep::root)>>*>(
           &Rep::root)}
-        } -> ConceptSame<typename Rep::Handle>;
+      } -> ConceptSame<typename Rep::Handle>;
     };
 
   template<typename Rep>
@@ -504,7 +492,8 @@ namespace snmalloc
        */
       path.move(true);
       while (path.move(false))
-      {}
+      {
+      }
 
       K curr = path.curr();
 
@@ -748,6 +737,46 @@ namespace snmalloc
       return get_root().is_null();
     }
 
+    /**
+     * Visit every live node's value, calling `f(value)` once per node.
+     *
+     * This is a read-only, structure-preserving traversal: it walks the
+     * tree exactly the way `print()` does (recursing on both children of
+     * every non-null `ChildRef`), but performs no rebalancing, insertion
+     * or removal, and does not go through the path-based mutation API
+     * (`RBPath`/`insert_path`/`remove_path`).  The tree's shape and every
+     * node's colour/child pointers are left completely unchanged.
+     *
+     * `f` must not mutate the tree (insert/remove/rebalance) while this
+     * call is in progress -- doing so could invalidate the `ChildRef`s
+     * still being visited.  Reading node values (as callers of this
+     * method are expected to do) is safe.
+     *
+     * Order is a pre-order walk (visit node, then first-direction child,
+     * then second-direction child) rather than a sorted in-order walk;
+     * callers that need a particular order should sort the collected
+     * values themselves.
+     */
+    template<typename F>
+    void for_each(F f)
+    {
+      for_each(get_root(), f);
+    }
+
+  private:
+    template<typename F>
+    void for_each(ChildRef curr, F& f)
+    {
+      if (curr.is_null())
+        return;
+
+      f(K(curr));
+      for_each(get_dir(true, curr), f);
+      for_each(get_dir(false, curr), f);
+    }
+
+  public:
+
     K remove_min()
     {
       if (is_empty())
@@ -755,7 +784,8 @@ namespace snmalloc
 
       auto path = get_root_path();
       while (path.move(true))
-      {}
+      {
+      }
 
       K result = path.curr();
 
