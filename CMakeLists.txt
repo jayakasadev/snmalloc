@@ -32,6 +32,18 @@ option(SNMALLOC_PTHREAD_FORK_PROTECTION "Guard against forking while allocator l
 option(SNMALLOC_ENABLE_FUZZING "Enable fuzzing instrumentation tests" OFF)
 option(SNMALLOC_USE_SELF_VENDORED_STL "Avoid using system STL" OFF)
 option(SNMALLOC_COVERAGE "Build with clang source-based coverage instrumentation" OFF)
+option(SNMALLOC_PROFILE "Build with heap profiling support" OFF)
+option(SNMALLOC_PROFILE_REFILL_SAMPLING "Sample small allocations at freelist refill boundaries" OFF)
+option(SNMALLOC_PROFILE_SECONDARY_STORAGE "Store profile samples outside the main heap" OFF)
+option(SNMALLOC_PROFILE_REFILL_SECONDARY "Enable refill sampling with secondary sample storage" OFF)
+if (SNMALLOC_PROFILE_REFILL_SECONDARY)
+  set(SNMALLOC_PROFILE_REFILL_SAMPLING ON CACHE BOOL "" FORCE)
+  set(SNMALLOC_PROFILE_SECONDARY_STORAGE ON CACHE BOOL "" FORCE)
+endif()
+if ((SNMALLOC_PROFILE_REFILL_SAMPLING OR SNMALLOC_PROFILE_SECONDARY_STORAGE)
+    AND NOT SNMALLOC_PROFILE)
+  message(FATAL_ERROR "Experimental profile options require SNMALLOC_PROFILE=ON")
+endif()
 # Options that apply only if we're not building the header-only library
 cmake_dependent_option(SNMALLOC_RUST_SUPPORT "Build static library for rust" OFF "NOT SNMALLOC_HEADER_ONLY_LIBRARY" OFF)
 cmake_dependent_option(SNMALLOC_RUST_LIBC_API "Include libc API in the rust library" OFF "SNMALLOC_RUST_SUPPORT" OFF)
@@ -456,6 +468,10 @@ endfunction()
 
 add_as_define(SNMALLOC_QEMU_WORKAROUND)
 add_as_define(SNMALLOC_TRACING)
+add_as_define(SNMALLOC_PROFILE)
+add_as_define(SNMALLOC_PROFILE_REFILL_SAMPLING)
+add_as_define(SNMALLOC_PROFILE_SECONDARY_STORAGE)
+add_as_define(SNMALLOC_PROFILE_REFILL_SECONDARY)
 add_as_define(SNMALLOC_CI_BUILD)
 add_as_define(SNMALLOC_PTHREAD_FORK_PROTECTION)
 add_as_define(SNMALLOC_PLATFORM_HAS_GETENTROPY)
@@ -549,6 +565,7 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
   # against both fast and check testlib variants.
   set(TESTLIB_ONLY_TESTS
     bits first_operation memory memory_usage multi_atexit multi_threadatexit
+    profile_sampler
     redblack redblack_for_each statistics teardown
     contention external_pointer large_alloc lotsofthreads post_teardown
     singlethread startup stack_walker_bench
@@ -716,8 +733,13 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
     if(NOT MSVC)
       target_compile_definitions(${name} PRIVATE "SNMALLOC_EXPORT=__attribute__((visibility(\"default\")))")
       set_target_properties(${name} PROPERTIES CXX_VISIBILITY_PRESET hidden INTERPROCEDURAL_OPTIMIZATION ${SNMALLOC_COMPILER_SUPPORT_IPO})
-      # Make debugging harder, and code faster.
-      target_compile_options(${name} PRIVATE -fomit-frame-pointer)
+      # The heap profiler walks frame pointers. Keep them only in profiling
+      # builds; retain the existing optimisation everywhere else.
+      if(SNMALLOC_PROFILE)
+        target_compile_options(${name} PRIVATE -fno-omit-frame-pointer)
+      else()
+        target_compile_options(${name} PRIVATE -fomit-frame-pointer)
+      endif()
 
       set_property(TARGET ${name} PROPERTY POSITION_INDEPENDENT_CODE ON)
 

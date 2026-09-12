@@ -1,6 +1,22 @@
 #pragma once
 #include <stddef.h>
 
+#ifdef SNMALLOC_PROFILE_REFILL_SECONDARY
+#  ifndef SNMALLOC_PROFILE_REFILL_SAMPLING
+#    define SNMALLOC_PROFILE_REFILL_SAMPLING
+#  endif
+#  ifndef SNMALLOC_PROFILE_SECONDARY_STORAGE
+#    define SNMALLOC_PROFILE_SECONDARY_STORAGE
+#  endif
+#endif
+
+#if ( \
+  defined(SNMALLOC_PROFILE_REFILL_SAMPLING) || \
+  defined(SNMALLOC_PROFILE_SECONDARY_STORAGE)) && \
+  !defined(SNMALLOC_PROFILE)
+#  error "Experimental profile modes require SNMALLOC_PROFILE"
+#endif
+
 #if defined(_MSC_VER) && !defined(__clang__)
 // 28 is FAST_FAIL_INVALID_BUFFER_ACCESS.  Not using the symbolic constant to
 // avoid depending on winnt.h
