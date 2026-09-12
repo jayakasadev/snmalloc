@@ -147,6 +147,25 @@ namespace snmalloc
       UNUSED(k, size);
       return true;
     }
+
+    /**
+     * Called by `Buddy::remove_buddy` before a node is merged into a bigger
+     * block.  Nothing to do: these free chunks are never individually
+     * decommitted, so they carry no per-node state.
+     */
+    static void on_consolidate(Contents k, size_t size)
+    {
+      UNUSED(k, size);
+    }
+
+    /**
+     * Called by `Buddy::remove_block` before a block is split in two.  Nothing
+     * to propagate, for the same reason as `on_consolidate`.
+     */
+    static void on_split(Contents whole, Contents second, size_t size)
+    {
+      UNUSED(whole, second, size);
+    }
   };
 
   struct SmallBuddyRange
