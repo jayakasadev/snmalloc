@@ -1,93 +1,120 @@
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
-filegroup(
-    name = "srcs",
-    srcs = glob(
-        [
-            "src/snmalloc/**/*",
-            "src/test/*.h",
-            "src/test/*.cc",
-            "CMakeLists.txt",
-        ],
-    ),
-    visibility = ["//visibility:private"],
-)
+# SNMALLOC_STATS / SNMALLOC_STATS_BASIC are OFF here, matching the CMake
+# default. Do not turn them on globally: the per-thread AllocStats counters can
+# fault during thread teardown when snmalloc is the global allocator. A
+# consumer that wants them can add the define to its own target.
+#
+# Heap profiling uses SNMALLOC_PROFILE, which is independent of the stats
+# tiers, so leaving stats off does not affect it.
+_COMMON_DEFINES = [
+    "SNMALLOC_CHECK_LOADS=false",
+    "SNMALLOC_PAGEID=false",
+    "SNMALLOC_USE_WAIT_ON_ADDRESS=1",
+]
 
-config_setting(
-    name = "release_with_debug",
-    values = {
-        "compilation_mode": "fastbuild",
-    },
-)
-
-config_setting(
-    name = "release",
-    values = {
-        "compilation_mode": "opt",
-    },
-)
-
-config_setting(
-    name = "debug",
-    values = {
-        "compilation_mode": "dbg",
-    },
-)
-
-CMAKE_FLAGS = {
-    "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "TRUE",
-    "SNMALLOC_OPTIMISE_FOR_CURRENT_MACHINE": "ON",
-    "SNMALLOC_USE_SELF_VENDORED_STL": "OFF",
-    "SNMALLOC_IPO": "ON",
-    "USE_SNMALLOC_STATS": "ON",
-    "SNMALLOC_BUILD_TESTING": "OFF",
-} | select({
-    ":release_with_debug": {"CMAKE_BUILD_TYPE": "RelWithDebInfo"},
-    ":release": {"CMAKE_BUILD_TYPE": "Release"},
-    ":debug": {"CMAKE_BUILD_TYPE": "Debug"},
-    "//conditions:default": {"CMAKE_BUILD_TYPE": "Release"},
+_COMMON_COPTS = [
+    "-std=c++20",
+] + select({
+    "@bazel_tools//src/conditions:windows": [],
+    "//conditions:default": [
+        "-fno-rtti",
+        "-fomit-frame-pointer",
+        "-ffunction-sections",
+    ],
 })
 
-cmake(
-    name = "snmalloc",
-    cache_entries = CMAKE_FLAGS,
-    generate_args = ["-G Ninja"],
-    lib_source = ":srcs",
-    out_shared_libs = select({
-        "@bazel_tools//src/conditions:darwin": [
-            "libsnmallocshim-checks-memcpy-only.dylib",
-            "libsnmallocshim-checks.dylib",
-            "libsnmallocshim.dylib",
-        ],
-        "//conditions:default": [],
-    }),
-    out_static_libs = [
-        "libsnmallocshim-static.a",
-        "libsnmalloc-new-override.a",
-    ],
-    postfix_script = "ninja",
+_PROFILE_COPTS = _COMMON_COPTS + select({
+    "@bazel_tools//src/conditions:windows": [],
+    "//conditions:default": ["-fno-omit-frame-pointer"],
+})
+
+cc_library(
+    name = "snmalloc_hdrs",
+    hdrs = glob(["src/snmalloc/**/*.h"]),
+    strip_include_prefix = "src",
     visibility = ["//visibility:public"],
 )
 
-cmake(
-    name = "snmalloc-rs",
-    cache_entries = CMAKE_FLAGS | {
-        "SNMALLOC_RUST_SUPPORT": "ON",
-    },
-    generate_args = ["-G Ninja"],
-    lib_source = ":srcs",
-    out_shared_libs = select({
-        "@bazel_tools//src/conditions:darwin": [
-            "libsnmallocshim-checks-memcpy-only.dylib",
-            "libsnmallocshim-checks.dylib",
-            "libsnmallocshim.dylib",
-        ],
-        "//conditions:default": [],
-    }),
-    out_static_libs = [
-        "libsnmallocshim-static.a",
-        "libsnmalloc-new-override.a",
+_ALLOC_SHIM_SRCS = [
+    "src/snmalloc/override/malloc.cc",
+    "src/snmalloc/override/new.cc",
+    "src/snmalloc/override/runtime_config.cc",
+    "src/snmalloc/override/stats_dump.cc",
+    "src/snmalloc/override/stats_export.cc",
+]
+
+# Bazel-native allocator shim. Mirrors CMake's snmallocshim-static archive
+# without requiring CMake or an install tree.
+cc_library(
+    name = "snmalloc",
+    srcs = _ALLOC_SHIM_SRCS,
+    copts = _COMMON_COPTS,
+    local_defines = _COMMON_DEFINES,
+    deps = [":snmalloc_hdrs"],
+    alwayslink = True,
+    visibility = ["//visibility:public"],
+)
+
+# Profile-enabled twin of `:snmalloc` -- the C++ global malloc/operator new
+# override built with SNMALLOC_PROFILE, so a C++ binary's own heap goes
+# through the Sampler instead of only the Rust side's. Consume it from Bazel
+# via a `cc_binary`/`cc_test` `malloc = "@snmalloc//:snmalloc-profile"`.
+#
+# Stats tiers stay off (see the top-of-file note) and refill sampling stays
+# off: this is the plain allocation-site sampler, matching
+# `:snmalloc-rs-profile`.
+cc_library(
+    name = "snmalloc-profile",
+    srcs = _ALLOC_SHIM_SRCS,
+    copts = _PROFILE_COPTS,
+    local_defines = _COMMON_DEFINES + [
+        "SNMALLOC_PROFILE",
     ],
-    postfix_script = "ninja",
+    deps = [":snmalloc_hdrs"],
+    alwayslink = True,
+    visibility = ["//visibility:public"],
+)
+
+_RUST_SHIM_SRCS = [
+    "src/snmalloc/override/rust.cc",
+    "src/snmalloc/override/runtime_config.cc",
+    "src/snmalloc/override/stats_dump.cc",
+    "src/snmalloc/override/stats_export.cc",
+]
+
+# Bazel-native Rust shim archive. Mirrors CMake's snmallocshim-rust source
+# set without requiring CMake or an install tree.
+cc_library(
+    name = "snmalloc-rs",
+    srcs = _RUST_SHIM_SRCS,
+    copts = _COMMON_COPTS,
+    local_defines = _COMMON_DEFINES,
+    deps = [":snmalloc_hdrs"],
+    visibility = ["//visibility:public"],
+)
+
+# Profile-enabled variant used by snmalloc_sys_profiling.
+cc_library(
+    name = "snmalloc-rs-profile",
+    srcs = _RUST_SHIM_SRCS,
+    copts = _PROFILE_COPTS,
+    local_defines = _COMMON_DEFINES + [
+        "SNMALLOC_PROFILE",
+    ],
+    deps = [":snmalloc_hdrs"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "snmalloc-rs-profile-refill-secondary",
+    srcs = _RUST_SHIM_SRCS,
+    copts = _PROFILE_COPTS,
+    local_defines = _COMMON_DEFINES + [
+        "SNMALLOC_PROFILE",
+        "SNMALLOC_PROFILE_REFILL_SAMPLING",
+        "SNMALLOC_PROFILE_SECONDARY_STORAGE",
+    ],
+    deps = [":snmalloc_hdrs"],
     visibility = ["//visibility:public"],
 )

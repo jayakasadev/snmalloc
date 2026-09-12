@@ -52,6 +52,106 @@ A more comprehensive write up is in [docs/security](./docs/security/README.md).
  - [Instructions for building snmalloc](docs/BUILDING.md)
  - [Instructions for porting snmalloc](docs/PORTING.md)
 
+## Heap Profiling
+
+snmalloc has an opt-in **statistical heap profiler**. When enabled at
+build time, it records a random sample of allocations together with
+their call stacks, for offline analysis with the usual flamegraph and
+pprof tools.
+
+### Enabling at build time
+
+The profiler is off by default. Turn it on with one CMake option:
+
+```sh
+cmake -B build -DSNMALLOC_PROFILE=ON
+cmake --build build
+```
+
+With `SNMALLOC_PROFILE=OFF` every profiling code path is compiled out.
+
+### What it samples
+
+Each allocation may be recorded, with a probability set by the *mean
+sampling interval* in bytes. The default is 524288 bytes (512 KiB), so
+roughly one allocation per 512 KiB requested is recorded. Sample weights
+are unbiased Poisson estimators: summing `weight` across a snapshot
+estimates total bytes requested. Scale by
+`allocated_size / requested_size` to estimate bytes the allocator
+actually handed back.
+
+You can change the interval at runtime. A smaller interval (say 64 KiB)
+gives more detail and costs more; a larger one (say 1 MiB) gives less
+detail and costs less. Measure your own workload to pick a value.
+
+### C ABI for embedding
+
+The C++ build exposes a few `extern "C"` symbols so you can drive the
+profiler from a non-Rust host:
+
+| Symbol | Purpose |
+| ------ | ------- |
+| `sn_rust_profile_supported` | Returns `true` iff built with `SNMALLOC_PROFILE=ON`. |
+| `sn_rust_profile_set_sampling_rate` | Set the mean sampling interval in bytes. `0` disables. |
+| `sn_rust_profile_get_sampling_rate` | Read the current sampling interval. |
+| `sn_rust_profile_snapshot_begin` / `_count` / `_get` / `_end` | RAII-style enumeration of currently-live sampled allocations. |
+| `sn_rust_profile_streaming_start` / `_stop` | Register a `void(*)(const SnRustProfileRawSample*)` callback that receives every sample as it occurs. |
+
+Every `SnRustProfileRawSample` has a `kind` byte:
+
+- `SN_RUST_PROFILE_KIND_ALLOC` — a newly sampled allocation.
+- `SN_RUST_PROFILE_KIND_RESIZE` — an in-place `realloc` changed the size
+  of an already-sampled allocation. The event carries the new
+  `requested_size` / `allocated_size` and keeps the original stack and
+  weight.
+
+An out-of-place `realloc` may emit a normal allocation event for the
+replacement; deallocation events are not streamed. Snapshots always report
+`kind == ALLOC`.
+
+The Rust crate calls these same exports. See
+`src/snmalloc/override/rust.cc` and `src/snmalloc/override/rust.h`.
+
+### Rust crate
+
+The [`snmalloc-rs`](snmalloc-rs/README.md) crate wraps the C ABI safely:
+a snapshot type ([`HeapProfile`](snmalloc-rs/src/profile.rs)), a
+streaming session ([`ProfilingSession`](snmalloc-rs/src/streaming.rs)),
+and an environment-variable initializer
+([`SnMalloc::init_profiling_from_env`](snmalloc-rs/src/config.rs)) for
+turning profiling on without recompiling. See
+[snmalloc-rs/README.md](snmalloc-rs/README.md#heap-profiling) for the
+API and examples.
+
+### Output formats
+
+The Rust crate writes two formats:
+
+- **Folded (collapsed) stacks** — one line per unique stack with summed
+  weights. Read by Brendan Gregg's
+  [`flamegraph.pl`](https://github.com/brendangregg/FlameGraph),
+  [`inferno-flamegraph`](https://github.com/jonhoo/inferno), and
+  [Speedscope](https://www.speedscope.app/).
+- **Google `pprof` protobuf** — read by `go tool pprof`,
+  [Pyroscope](https://pyroscope.io/), [Polar Signals
+  Cloud](https://www.polarsignals.com/), and
+  [Parca](https://www.parca.dev/). Emitted with live
+  `inuse_objects` / `inuse_space` axes.
+
+### Measuring overhead
+
+To measure the profiler's cost on your machine, run the criterion suite
+in
+[`snmalloc-rs/benches/profile_bench.rs`](snmalloc-rs/benches/profile_bench.rs).
+It compares three configurations: `profile-off`, `profile-on-inactive`,
+and `profile-on-active`.
+
+### Further reading
+
+- [PMU profiling](docs/profiling-pmu.md) — attributing cache misses,
+  false sharing, and branch-hint misses using `perf` on Linux and
+  Instruments on macOS.
+
 # Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a

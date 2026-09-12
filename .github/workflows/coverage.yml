@@ -16,7 +16,6 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    # Nightly at 04:00 UTC; cheapest free-runner slot.
     - cron: '0 4 * * *'
   workflow_dispatch:
 

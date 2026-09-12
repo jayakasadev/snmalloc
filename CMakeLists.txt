@@ -44,6 +44,30 @@ if ((SNMALLOC_PROFILE_REFILL_SAMPLING OR SNMALLOC_PROFILE_SECONDARY_STORAGE)
     AND NOT SNMALLOC_PROFILE)
   message(FATAL_ERROR "Experimental profile options require SNMALLOC_PROFILE=ON")
 endif()
+# Allocator stats, in two tiers:
+#   BASIC -- frontend fast/slow path counters, backend commit/decommit,
+#            largebuddy free-chunk histogram.
+#   FULL  -- BASIC plus per-size-class and lifetime histograms.
+#
+# `SNMALLOC_STATS` is an alias for `SNMALLOC_STATS_BASIC`.
+# `SNMALLOC_STATS_FULL` also enables BASIC.
+#
+# Both are off by default, so a release build compiles no stats code.
+option(SNMALLOC_STATS "Backwards-compatible alias for SNMALLOC_STATS_BASIC" OFF)
+option(SNMALLOC_STATS_BASIC "Enable basic frontend + backend stats" OFF)
+option(SNMALLOC_STATS_FULL "Enable full stats incl. per-sizeclass + lifetime histograms" OFF)
+
+# Tier resolution: FULL implies BASIC; legacy SNMALLOC_STATS implies BASIC.
+if (SNMALLOC_STATS_FULL)
+  set(SNMALLOC_STATS_BASIC ON CACHE BOOL "Enable basic frontend + backend stats" FORCE)
+endif()
+if (SNMALLOC_STATS AND NOT SNMALLOC_STATS_BASIC AND NOT SNMALLOC_STATS_FULL)
+  set(SNMALLOC_STATS_BASIC ON CACHE BOOL "Enable basic frontend + backend stats" FORCE)
+endif()
+# Profile-guided optimization. cmake/snmalloc_pgo.cmake (included below)
+# reads this option and applies the -fprofile-{generate,use} flags to
+# every target. See that file and scripts/run-pgo-build.sh for the
+# two-stage workflow.
 # Options that apply only if we're not building the header-only library
 cmake_dependent_option(SNMALLOC_RUST_SUPPORT "Build static library for rust" OFF "NOT SNMALLOC_HEADER_ONLY_LIBRARY" OFF)
 cmake_dependent_option(SNMALLOC_RUST_LIBC_API "Include libc API in the rust library" OFF "SNMALLOC_RUST_SUPPORT" OFF)
@@ -106,6 +130,10 @@ if (SNMALLOC_COVERAGE)
   add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
   add_link_options(-fprofile-instr-generate -fcoverage-mapping)
 endif()
+
+# Profile-guided optimization. Must come before any add_library or
+# add_executable so every object in the build gets the PGO flags.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/snmalloc_pgo.cmake)
 
 if(MSVC AND SNMALLOC_STATIC_LIBRARY AND (SNMALLOC_STATIC_LIBRARY_PREFIX STREQUAL ""))
   message(FATAL_ERROR "Empty static library prefix not supported on MSVC")
@@ -472,6 +500,11 @@ add_as_define(SNMALLOC_PROFILE)
 add_as_define(SNMALLOC_PROFILE_REFILL_SAMPLING)
 add_as_define(SNMALLOC_PROFILE_SECONDARY_STORAGE)
 add_as_define(SNMALLOC_PROFILE_REFILL_SECONDARY)
+add_as_define(SNMALLOC_STATS)
+# Tiered stats.  Resolved above: SNMALLOC_STATS implies BASIC, and FULL
+# also enables BASIC.
+add_as_define(SNMALLOC_STATS_BASIC)
+add_as_define(SNMALLOC_STATS_FULL)
 add_as_define(SNMALLOC_CI_BUILD)
 add_as_define(SNMALLOC_PTHREAD_FORK_PROTECTION)
 add_as_define(SNMALLOC_PLATFORM_HAS_GETENTROPY)
@@ -787,9 +820,22 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
   set(MALLOC src/snmalloc/override/malloc.cc)
   set(NEW src/snmalloc/override/new.cc)
   set(MEMCPY src/snmalloc/override/memcpy.cc)
-  set(RUST src/snmalloc/override/rust.cc)
+  # The next three files carry C ABI symbols that both the Rust shim and
+  # the libc shim link in, so they are present in every build flavour.
+  #
+  # stats_export.cc -- `snmalloc_get_full_stats`.
+  set(STATS_EXPORT src/snmalloc/override/stats_export.cc)
+  # runtime_config.cc -- `snmalloc_{set,get}_sample_interval` /
+  # `_decay_rate` / `_max_local_cache`, backing `snmalloc::RuntimeConfig`.
+  set(RUNTIME_CONFIG src/snmalloc/override/runtime_config.cc)
+  # stats_dump.cc -- `snmalloc_dump_stats_to_buffer`, plus the C++
+  # overloads `snmalloc::dump_stats(FILE*)` and
+  # `snmalloc::dump_stats_to_string(std::string&)`.  Formats the output
+  # of `snmalloc_get_full_stats`.
+  set(STATS_DUMP src/snmalloc/override/stats_dump.cc)
+  set(RUST src/snmalloc/override/rust.cc ${STATS_EXPORT} ${RUNTIME_CONFIG} ${STATS_DUMP})
 
-  set(ALLOC ${MALLOC} ${NEW})
+  set(ALLOC ${MALLOC} ${NEW} ${STATS_EXPORT} ${RUNTIME_CONFIG} ${STATS_DUMP})
   set(ALL ${ALLOC} ${MEMCPY})
 
   if (SNMALLOC_STATIC_LIBRARY)
@@ -982,6 +1028,41 @@ install(EXPORT snmallocConfig
   NAMESPACE snmalloc::
   DESTINATION "share/snmalloc"
 )
+
+# Branch-hint inventory.
+#
+# Writes a JSON list of every SNMALLOC_LIKELY / SNMALLOC_UNLIKELY call
+# site in src/snmalloc/. snmalloc-tools uses it to turn branch-miss
+# addresses from `perf record -e branch-misses` into named hint sites.
+#
+# This is a stand-alone target, not part of the library build, so a
+# missing Python interpreter skips it instead of failing the build.
+set(SNMALLOC_BRANCH_HINTS_JSON "${CMAKE_BINARY_DIR}/snmalloc_branch_hints.json")
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_Interpreter_FOUND)
+  add_custom_command(
+    OUTPUT ${SNMALLOC_BRANCH_HINTS_JSON}
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_SOURCE_DIR}/scripts/dump_branch_hints.py
+      --repo-root ${CMAKE_SOURCE_DIR}
+      --pretty
+      -o ${SNMALLOC_BRANCH_HINTS_JSON}
+    DEPENDS ${CMAKE_SOURCE_DIR}/scripts/dump_branch_hints.py
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Dumping SNMALLOC_LIKELY/UNLIKELY inventory to ${SNMALLOC_BRANCH_HINTS_JSON}"
+    VERBATIM)
+  add_custom_target(branch_hints_inventory
+    DEPENDS ${SNMALLOC_BRANCH_HINTS_JSON})
+  # Optional install: snmalloc-tools and snmalloc-rs build.rs look for the
+  # file under share/snmalloc/.
+  install(FILES ${SNMALLOC_BRANCH_HINTS_JSON}
+    DESTINATION share/snmalloc
+    OPTIONAL)
+else()
+  message(STATUS
+    "Python3 not found; skipping branch_hints_inventory target. "
+    "Build will succeed without the snmalloc_branch_hints.json sidecar.")
+endif()
 
 if (SNMALLOC_ENABLE_FUZZING)
   add_subdirectory(fuzzing)
