@@ -1,12 +1,3 @@
-//! `memory_stats` reads a process-global atomic counter that every
-//! allocation in the process feeds into. Running this assertion in the
-//! same binary as other allocating tests (which cargo runs in parallel
-//! threads by default) makes the `after <= during` check racy: another
-//! test thread can pull a fresh chunk from the backend between the two
-//! snapshots and push `current_memory_usage` up. Cargo runs each file
-//! under `tests/` as its own binary in its own process, giving us the
-//! isolation this test requires.
-
 use snmalloc_rs::SnMalloc;
 use std::alloc::{GlobalAlloc, Layout};
 
